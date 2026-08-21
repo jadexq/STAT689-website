@@ -37,7 +37,14 @@ ENV NODE_ENV=production
 COPY --from=build --chown=node:node /app/virtual_space ./virtual_space
 COPY --from=build --chown=node:node /app/virtual_ta ./virtual_ta
 COPY --chown=node:node docker/start.sh ./docker/start.sh
-RUN chmod +x docker/start.sh
+COPY --chown=node:node docker/sync.mjs ./docker/sync.mjs
+RUN chmod +x docker/start.sh docker/sync.mjs
+
+# Both servers write here; docker/sync.mjs restores it at boot and uploads a
+# snapshot of it on a timer. On Cloud Run this is an in-memory filesystem, so
+# it is durable only because of that sync — and it counts against instance RAM.
+RUN mkdir -p /data && chown node:node /data
+ENV DATA_DIR=/data
 
 # Cloud Run injects PORT; the space listens on it and is the only thing
 # exposed. The TA stays on 127.0.0.1:3000, reachable from the space alone.

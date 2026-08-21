@@ -77,7 +77,9 @@ for the full list. Beyond the LLM settings and `TA_BASE_URL`:
 | `ADMIN_EMAILS` | Instructor allowlist. Behind IAP, empty means nobody is an instructor; locally it defaults to `DEV_USER`. |
 | `ROSTER` | `email:Name` pairs for avatar labels. Without one, the name is guessed from the address. |
 | `DEV_USER` | Who you are when not behind IAP (default `jade@local`). |
-| `DATA_DIR` | Root for everything mutable. Unset locally (uses `data/`); on Cloud Run it points at the mounted GCS bucket. |
+| `DATA_DIR` | Root for everything mutable. Unset locally (uses `data/`); a plain writable directory in the container. Not a bucket mount — see `../docker/sync.mjs`. |
+| `SNAPSHOT_URI` | Where that root is snapshotted (`gs://…` or `file://…`). Unset means no sync, which is right locally. |
+| `SNAPSHOT_FLUSH_MS` | Upload at most this often, and only when something changed. Default 120000. |
 
 The server prints which mode it is in at startup (`Auth: …`).
 

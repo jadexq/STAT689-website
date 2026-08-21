@@ -38,9 +38,22 @@ One Cloud Run service behind Google IAP, both servers in one container,
 scaled to zero when nobody is in class.
 
 ```bash
-docker build -t stat689 . && docker run -p 8080:8080 --env-file virtual_ta/.env -e DATA_DIR=/data -v "$PWD/.localdata:/data" stat689
+docker build -t stat689 . && docker run -p 8080:8080 --env-file virtual_ta/.env -e SNAPSHOT_URI=file:///snap -v "$PWD/.localdata:/snap" stat689
 ```
 
-The full plan — architecture, IAM, the GCS mount, cost, and the two open
+The image sets `DATA_DIR=/data` itself. That directory is **ephemeral, and
+on Cloud Run it lives in RAM** — `docker/sync.mjs` is what makes it durable:
+it restores the tree before the servers start, then uploads one snapshot
+whenever something changes, at most every two minutes, plus a final one on
+`SIGTERM` and a dated archive once a day. Point `SNAPSHOT_URI` at
+`gs://<bucket>/state` in the cloud, `file://…` locally, or leave it unset for
+no sync at all.
+
+Storage is deliberately *not* a mounted bucket: appending JSONL through GCS
+FUSE rewrites the whole object per line, which GCS throttles to about one
+write a second and bills against a 5,000-write monthly free tier. A probe
+drew 358 HTTP 429s and failed to finish 2,000 appends in nine minutes.
+
+The full plan — architecture, IAM, the free-tier analysis, cost, and the two
 questions still to be settled by a spike — is in
 `user_requirements/plan/gcp-deployment-plan.md` (kept out of git).
