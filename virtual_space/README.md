@@ -1,10 +1,9 @@
 # Virtual Space — MVP (built, TA brain connected)
 
-The classroom virtual space: a 43×34 campus with **ten virtual students**
-(Sam, Ava, Ben, Chloe, Dev, Emma, Felix, Grace, Hana, Ivan — thin AI
-personas), Jade's office, two commons halls, and a bottom band of mode
-rooms — Classroom / Prep Room / **Library** 📌 / **Computer Lab** 📌 /
-TA Office. **Terra** (the virtual TA) is powered by the real Virtual TA
+The classroom virtual space: a 43×21 campus with **five virtual students**
+(Sam, Ben, Chloe, Dev, Grace — thin AI personas), Jade's office, a commons
+hall, and a bottom band of mode rooms — Classroom / Prep Room /
+**Library** 📌 / **Computer Lab** 📌 / TA Office. **Terra** (the virtual TA) is powered by the real Virtual TA
 brain in `../virtual_ta`. Requirements and plans:
 [`../user_requirements/virtual_space_requirements.html`](../user_requirements/virtual_space_requirements.html)
 (Parts 3, 5 & 6).

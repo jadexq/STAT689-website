@@ -61,10 +61,10 @@ async function main() {
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
-  console.log("\n1. Join / world state — 1 human + 10 virtual students + Terra");
+  console.log("\n1. Join / world state — 1 human + 5 virtual students + Terra");
   await waitUntil(() => !!init, 5000, "init received");
-  await waitUntil(() => world.entities.length === 12, 5000, "12 inhabitants present");
-  assert(world.entities.filter((e) => e.kind === "agent").length === 11, "11 agents (10 students + Terra)");
+  await waitUntil(() => world.entities.length === 7, 5000, "7 inhabitants present");
+  assert(world.entities.filter((e) => e.kind === "agent").length === 6, "6 agents (5 students + Terra)");
   assert(at(me(), spawnOf("office-jade")), "I spawned in Jade's office");
   assert(at(terra(), spawnOf("office-ta")), "Terra is in the TA office");
 

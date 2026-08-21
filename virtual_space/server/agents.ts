@@ -1,4 +1,4 @@
-// The AI inhabitants: ten virtual students (thin local personas) and
+// The AI inhabitants: five virtual students (thin local personas) and
 // Terra, the virtual TA (whose replies come from the Virtual TA brain —
 // see ta.ts / MainRoom). Per the v1 rules, agents only reply when spoken
 // to in their room or when the admin directs them — no autonomy.
@@ -20,16 +20,11 @@ const STUDENT_BASE =
 
 // name, office, color, one-line personality
 const STUDENTS: [string, string, string, string][] = [
-  ["Sam",   "office-s1",  "#ffb454", "You are a curious generalist who connects ideas across fields."],
-  ["Ava",   "office-s2",  "#ff8fa3", "You love AI art and vision models, and always bring up images and diffusion."],
-  ["Ben",   "office-s3",  "#6fd08c", "You are the friendly skeptic — you ask for evidence and poke at hype."],
-  ["Chloe", "office-s4",  "#f4d35e", "You are theory-minded and happiest when the math is on the table."],
-  ["Dev",   "office-s5",  "#9ad1d4", "You are a systems person — GPUs, throughput, and inference costs excite you."],
-  ["Emma",  "office-s6",  "#e6a4f4", "You come from linguistics and care about language, meaning, and tokenization."],
-  ["Felix", "office-s7",  "#f28b66", "You are into robotics and embodied agents, and relate everything to acting in the world."],
-  ["Grace", "office-s8",  "#a3d977", "You think like a product builder — you ask what users actually need."],
-  ["Hana",  "office-s9",  "#ffd166", "You are the diligent note-taker who summarizes and keeps the group on track."],
-  ["Ivan",  "office-s10", "#8ecae6", "You are a competitive programmer who reaches for code and benchmarks first."],
+  ["Sam",   "office-s1", "#ffb454", "You are a curious generalist who connects ideas across fields."],
+  ["Ben",   "office-s2", "#6fd08c", "You are the friendly skeptic — you ask for evidence and poke at hype."],
+  ["Chloe", "office-s3", "#f4d35e", "You are theory-minded and happiest when the math is on the table."],
+  ["Dev",   "office-s4", "#9ad1d4", "You are a systems person — GPUs, throughput, and inference costs excite you."],
+  ["Grace", "office-s5", "#ff8fa3", "You think like a product builder — you ask what users actually need."],
 ];
 
 export const AGENTS: AgentDef[] = [

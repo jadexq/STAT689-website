@@ -216,8 +216,8 @@ export class MainRoom extends Room {
   }
 
   // Agents in the room reply: Terra always (the brain), then at most
-  // MAX_STUDENT_REPLIES virtual students — with 10 students one "hello"
-  // must not trigger 10 LLM calls.
+  // MAX_STUDENT_REPLIES virtual students — a room full of students must
+  // not turn one "hello" into one LLM call per head.
   private scheduleReplies(rid: string, sender: { name: string; text: string }) {
     const present = this.agents.filter((a) => roomAt(a.x, a.y) === rid && !a.busy);
     const terra = present.find((a) => a.id === TERRA_ID);
