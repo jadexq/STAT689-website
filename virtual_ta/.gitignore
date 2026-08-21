@@ -1,0 +1,14 @@
+# Secrets — the LLM key and GitHub token live here, server-side only
+.env
+
+node_modules/
+
+# Local, regenerable artifacts
+data/*
+!data/.gitkeep
+output/*
+!output/.gitkeep
+*.log
+
+# Improvement records — evidence logs can get large; kept local
+docs/improvements/*/

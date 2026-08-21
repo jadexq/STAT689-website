@@ -1,0 +1,715 @@
+// Browser client: Phaser renders the world, colyseus.js talks to the
+// server. The right-hand panel (boards + chat + admin) is plain DOM,
+// wired to the same Colyseus room. The server is authoritative — this
+// file only sends intents (step/goto/chat/admin/mic) and renders what
+// the server broadcasts.
+//
+// Roles (temporary testing switch, no auth): "student" (you are Jade,
+// with an avatar) or "admin" (no avatar; keyboard/mouse drive Terra;
+// chat is 🔒 private-to-TA or 🗣 speak-as-TA). Picked via the dropdown,
+// which reloads the page with ?role=…
+//
+// Rendering: the entire static world (checkered floors, shaded walls,
+// furniture, door thresholds) is drawn once into a single baked texture —
+// zero per-frame cost; only the dozen avatar containers ever update. The
+// camera follows your avatar (or Terra for the admin) across the campus.
+
+import Phaser from "phaser";
+import { Client, Room } from "colyseus.js";
+
+type Entity = { id: string; name: string; kind: "human" | "agent"; color: string; x: number; y: number };
+type RoomInfo = {
+  id: string;
+  label: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  tint: string;
+  kind: "office" | "special" | "commons";
+  forcedSkill?: string;
+  modeLabel?: string;
+  hasBoard?: boolean;
+};
+type InitMsg = {
+  tile: number;
+  map: string[];
+  doors: { x: number; y: number }[];
+  rooms: RoomInfo[];
+  you: string | null;
+  role: "student" | "admin";
+  agents: { key: string; name: string }[];
+};
+
+const params = new URLSearchParams(location.search);
+const ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
+
+let room: Room;
+let init: InitMsg;
+let scene: WorldScene | null = null;
+let latestWorld: Entity[] = [];
+
+const TERRA_ID = "agent-terra";
+const followId = () => (ROLE === "admin" ? TERRA_ID : init?.you);
+
+// ---------- color helpers ----------
+
+function hex(color: string): number {
+  return parseInt(color.replace("#", ""), 16);
+}
+function shade(c: number, f: number): number {
+  const r = Math.min(255, Math.round(((c >> 16) & 0xff) * f));
+  const g = Math.min(255, Math.round(((c >> 8) & 0xff) * f));
+  const b = Math.min(255, Math.round((c & 0xff) * f));
+  return (r << 16) | (g << 8) | b;
+}
+
+// ---------- Phaser scene ----------
+
+function roomInfoAt(x: number, y: number): RoomInfo | undefined {
+  const named = init?.rooms.find((r) => r.kind !== "commons" && x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2);
+  return named ?? init?.rooms.find((r) => r.kind === "commons");
+}
+
+function labelFor(e: Entity): string {
+  if (e.kind !== "agent") return e.name;
+  const mode = e.id === TERRA_ID ? roomInfoAt(e.x, e.y)?.modeLabel : undefined;
+  return `${e.name} 🤖${mode ? ` · ${mode}` : ""}`;
+}
+
+const MINI_W = 180; // minimap width in px
+
+class WorldScene extends Phaser.Scene {
+  private avatars = new Map<string, { c: Phaser.GameObjects.Container; label: Phaser.GameObjects.Text }>();
+  private lastStep = 0;
+  private following = false;
+  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+  private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
+  private roomLabels: Phaser.GameObjects.Text[] = [];
+  private miniCam!: Phaser.Cameras.Scene2D.Camera;
+  private miniMarkers!: Phaser.GameObjects.Graphics;
+  private miniZoom = 1;
+  private miniH = 0;
+  private miniDrag = false;
+  private freeLook = false; // user panned away; re-follow on next move
+  private focusContainer: Phaser.GameObjects.Container | null = null;
+
+  create() {
+    const T = init.tile;
+    const W = init.map[0].length * T;
+    const H = init.map.length * T;
+
+    this.drawWorld(T, W, H);
+
+    // Room labels (static texts).
+    for (const r of init.rooms) {
+      const cx = ((r.x1 + r.x2 + 1) / 2) * T;
+      const cy = (r.y1 + 0.7) * T;
+      const label = this.add
+        .text(cx, cy, (r.hasBoard ? "📌 " : "") + r.label.toUpperCase(), {
+          fontFamily: "sans-serif",
+          fontSize: r.kind === "office" ? "10px" : "11px",
+          color: "#9fb0d0",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.85)
+        .setDepth(5);
+      this.roomLabels.push(label);
+    }
+
+    // Camera roams the whole campus, following the focus avatar, zoomed in
+    // to a room-scale view (the campus is much bigger than the viewport).
+    this.cameras.main.setBounds(0, 0, W, H);
+    this.cameras.main.setZoom(1.5);
+
+    // Minimap: a second camera zoomed out over the whole campus, pinned to
+    // the top-right. Avatars are hidden in it (their containers are ignored)
+    // and drawn as crisp dots instead, plus the main camera's view rectangle.
+    this.miniZoom = MINI_W / W;
+    this.miniH = Math.round(H * this.miniZoom);
+    this.miniCam = this.cameras.add(this.scale.width - MINI_W - 10, 10, MINI_W, this.miniH);
+    this.miniCam.setZoom(this.miniZoom).centerOn(W / 2, H / 2);
+    this.miniCam.setBackgroundColor(0x0b0e18);
+    this.miniCam.ignore(this.roomLabels);
+    this.miniMarkers = this.add.graphics().setDepth(20);
+    this.cameras.main.ignore(this.miniMarkers);
+    this.scale.on("resize", (size: Phaser.Structs.Size) => {
+      this.miniCam.setPosition(size.width - MINI_W - 10, 10);
+    });
+
+    // A contrasting DOM frame around the minimap (crisp at any zoom).
+    const frame = document.createElement("div");
+    frame.id = "minimap-frame";
+    frame.style.width = `${MINI_W + 4}px`;
+    frame.style.height = `${this.miniH + 4}px`;
+    document.getElementById("game")!.appendChild(frame);
+
+    // Input: arrows / WASD step, click walks (server drives Terra for
+    // admin). Clicking or dragging ON the minimap pans the main view
+    // instead; two-finger trackpad scroll pans too. Any own movement
+    // snaps the camera back to following you.
+    this.cursors = this.input.keyboard!.createCursorKeys();
+    this.wasd = this.input.keyboard!.addKeys("W,A,S,D") as Record<string, Phaser.Input.Keyboard.Key>;
+    this.input.on("pointerdown", (ptr: Phaser.Input.Pointer) => {
+      if (this.inMinimap(ptr)) {
+        this.miniDrag = true;
+        this.panToMinimapPoint(ptr);
+        return;
+      }
+      this.refollow();
+      room.send("goto", { x: Math.floor(ptr.worldX / T), y: Math.floor(ptr.worldY / T) });
+    });
+    this.input.on("pointermove", (ptr: Phaser.Input.Pointer) => {
+      if (this.miniDrag && ptr.isDown) this.panToMinimapPoint(ptr);
+    });
+    this.input.on("pointerup", () => (this.miniDrag = false));
+    this.input.on("wheel", (_p: unknown, _o: unknown, dx: number, dy: number) => {
+      const cam = this.cameras.main;
+      cam.stopFollow();
+      this.freeLook = true;
+      cam.setScroll(cam.scrollX + dx / cam.zoom, cam.scrollY + dy / cam.zoom);
+    });
+    this.input.keyboard!.disableGlobalCapture();
+
+    scene = this;
+    this.updateEntities(latestWorld);
+  }
+
+  // Draw floors, walls, doors, and furniture ONCE into a baked texture.
+  private drawWorld(T: number, W: number, H: number) {
+    const g = this.add.graphics();
+    const doorSet = new Set(init.doors.map((d) => `${d.x},${d.y}`));
+
+    // Floors: per-room tint with a subtle checker; doors highlighted.
+    for (let y = 0; y < init.map.length; y++) {
+      for (let x = 0; x < init.map[y].length; x++) {
+        if (init.map[y][x] !== ".") continue;
+        const base = hex(roomInfoAt(x, y)?.tint || "#2b3247");
+        let col = (x + y) % 2 === 0 ? base : shade(base, 0.93);
+        if (doorSet.has(`${x},${y}`)) col = shade(base, 1.35);
+        g.fillStyle(col, 1);
+        g.fillRect(x * T, y * T, T, T);
+      }
+    }
+    // Walls: a lighter "face" where a wall meets floor below, darker cap otherwise.
+    for (let y = 0; y < init.map.length; y++) {
+      for (let x = 0; x < init.map[y].length; x++) {
+        if (init.map[y][x] === ".") continue;
+        const floorBelow = init.map[y + 1]?.[x] === ".";
+        if (floorBelow) {
+          g.fillStyle(0x353e6b, 1);
+          g.fillRect(x * T, y * T, T, T * 0.55);
+          g.fillStyle(0x232946, 1);
+          g.fillRect(x * T, y * T + T * 0.55, T, T * 0.45);
+        } else {
+          g.fillStyle(0x262c4a, 1);
+          g.fillRect(x * T, y * T, T, T);
+        }
+      }
+    }
+    this.drawFurniture(g, T);
+
+    g.generateTexture("worldbg", W, H);
+    g.destroy();
+    this.add.image(0, 0, "worldbg").setOrigin(0, 0).setDepth(0);
+  }
+
+  private drawFurniture(g: Phaser.GameObjects.Graphics, T: number) {
+    const desk = (tx: number, ty: number, w = 1.6, h = 0.9) => {
+      g.fillStyle(0x2a2119, 1);
+      g.fillRoundedRect(tx * T, ty * T + 3, w * T, h * T, 4);
+      g.fillStyle(0x4a3c2e, 1);
+      g.fillRoundedRect(tx * T, ty * T, w * T, h * T - 3, 4);
+    };
+    const chair = (tx: number, ty: number) => {
+      g.fillStyle(0x1b2136, 1);
+      g.fillCircle(tx * T, ty * T, T * 0.28);
+    };
+    const plant = (tx: number, ty: number) => {
+      g.fillStyle(0x3a2f26, 1);
+      g.fillCircle(tx * T, ty * T + 4, T * 0.22);
+      g.fillStyle(0x3f7d4e, 1);
+      g.fillCircle(tx * T, ty * T - 3, T * 0.3);
+      g.fillStyle(0x55a468, 1);
+      g.fillCircle(tx * T - 4, ty * T - 6, T * 0.16);
+    };
+    const table = (tx: number, ty: number, r = 0.7) => {
+      g.fillStyle(0x33291f, 1);
+      g.fillCircle(tx * T, ty * T + 3, r * T);
+      g.fillStyle(0x51422f, 1);
+      g.fillCircle(tx * T, ty * T, r * T);
+    };
+    const monitor = (tx: number, ty: number) => {
+      g.fillStyle(0x11141f, 1);
+      g.fillRect(tx * T, ty * T, T * 0.7, T * 0.5);
+      g.fillStyle(0x39c2d7, 0.9);
+      g.fillRect(tx * T + 2, ty * T + 2, T * 0.7 - 4, T * 0.5 - 4);
+    };
+    const bookshelf = (tx: number, ty: number) => {
+      g.fillStyle(0x2a2119, 1);
+      g.fillRect(tx * T, ty * T, T * 1.8, T * 0.55);
+      const cols = [0xc94f4f, 0x4f7dc9, 0xc9a24f, 0x5aa46a, 0x9a6ac9];
+      for (let i = 0; i < 5; i++) {
+        g.fillStyle(cols[i], 1);
+        g.fillRect(tx * T + 3 + i * (T * 0.33), ty * T + 3, T * 0.24, T * 0.42);
+      }
+    };
+    const pinboard = (tx: number, ty: number) => {
+      g.fillStyle(0x5a4a22, 1);
+      g.fillRect(tx * T, ty * T, T * 1.4, T * 0.5);
+      g.fillStyle(0xf3e9c9, 1);
+      g.fillRect(tx * T + 4, ty * T + 4, T * 0.4, T * 0.34);
+      g.fillRect(tx * T + T * 0.6, ty * T + 5, T * 0.4, T * 0.3);
+    };
+
+    for (const r of init.rooms) {
+      if (r.kind === "office") {
+        desk(r.x1 + 0.6, r.y1 + 0.6);
+        chair(r.x1 + 1.4, r.y1 + 2.1);
+        plant(r.x2 + 0.5, r.y1 + 0.6);
+      } else if (r.id === "classroom") {
+        g.fillStyle(0xdfe6f5, 0.85); // whiteboard along the top wall
+        g.fillRect((r.x1 + 0.7) * T, r.y1 * T + 4, (r.x2 - r.x1 - 1.4) * T, T * 0.35);
+        for (let row = 0; row < 2; row++)
+          for (let col = 0; col < 3; col++) desk(r.x1 + 0.8 + col * 2.3, r.y1 + 2 + row * 1.8, 1.4, 0.7);
+      } else if (r.id === "prep-room") {
+        desk(r.x1 + 1.5, r.y1 + 2, 3.2, 1.3);
+        g.fillStyle(0xf3f3f3, 0.9);
+        g.fillRect((r.x1 + 2) * T, (r.y1 + 2.2) * T, T * 0.5, T * 0.35);
+        g.fillRect((r.x1 + 3) * T, (r.y1 + 2.4) * T, T * 0.5, T * 0.35);
+        plant(r.x2 + 0.5, r.y2 + 0.5);
+      } else if (r.id === "library") {
+        bookshelf(r.x1 + 0.6, r.y1 + 0.8);
+        bookshelf(r.x1 + 3.2, r.y1 + 0.8);
+        bookshelf(r.x1 + 5.8, r.y1 + 0.8);
+        pinboard(r.x1 + 2.8, r.y1 + 3.4);
+        table(r.x1 + 1.6, r.y1 + 4.4, 0.6);
+      } else if (r.id === "computer-lab") {
+        for (let row = 0; row < 2; row++)
+          for (let col = 0; col < 2; col++) {
+            desk(r.x1 + 0.9 + col * 3, r.y1 + 1.4 + row * 2.2, 2, 0.8);
+            monitor(r.x1 + 1.4 + col * 3, r.y1 + 1.45 + row * 2.2);
+          }
+        pinboard(r.x1 + 2.6, r.y1 + 4.6);
+      } else if (r.id === "office-ta") {
+        desk(r.x1 + 0.8, r.y1 + 0.8, 2, 1);
+        chair(r.x1 + 1.8, r.y1 + 2.4);
+        plant(r.x1 + 0.7, r.y2 + 0.4);
+        plant(r.x2 + 0.4, r.y1 + 0.7);
+      } else if (r.kind === "commons") {
+        table(6, 10.5);
+        table(21, 10.5);
+        table(36, 10.5);
+        table(11, 23.5);
+        table(31, 23.5);
+        plant(1.7, 8.7);
+        plant(41.3, 8.7);
+        plant(1.7, 25.3);
+        plant(41.3, 25.3);
+      }
+    }
+  }
+
+  update(time: number) {
+    this.drawMiniMarkers();
+    if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+    if (time - this.lastStep < 140) return;
+    let dx = 0;
+    let dy = 0;
+    if (this.cursors.left.isDown || this.wasd.A.isDown) dx = -1;
+    else if (this.cursors.right.isDown || this.wasd.D.isDown) dx = 1;
+    else if (this.cursors.up.isDown || this.wasd.W.isDown) dy = -1;
+    else if (this.cursors.down.isDown || this.wasd.S.isDown) dy = 1;
+    if (dx || dy) {
+      this.refollow();
+      room.send("step", { dx, dy });
+      this.lastStep = time;
+    }
+  }
+
+  private inMinimap(ptr: Phaser.Input.Pointer): boolean {
+    return (
+      ptr.x >= this.miniCam.x &&
+      ptr.x <= this.miniCam.x + MINI_W &&
+      ptr.y >= this.miniCam.y &&
+      ptr.y <= this.miniCam.y + this.miniH
+    );
+  }
+
+  // Center the main view on the world point under the minimap cursor.
+  private panToMinimapPoint(ptr: Phaser.Input.Pointer) {
+    const wx = (ptr.x - this.miniCam.x) / this.miniZoom;
+    const wy = (ptr.y - this.miniCam.y) / this.miniZoom;
+    this.cameras.main.stopFollow();
+    this.freeLook = true;
+    this.cameras.main.centerOn(wx, wy);
+  }
+
+  // Snap the camera back to following the focus avatar after free-look.
+  private refollow() {
+    if (!this.freeLook || !this.focusContainer) return;
+    this.freeLook = false;
+    this.cameras.main.startFollow(this.focusContainer, true, 0.12, 0.12);
+  }
+
+  // Entity dots + the main camera's view rectangle, world-sized so the
+  // minimap camera scales them down; ignored by the main camera.
+  private drawMiniMarkers() {
+    if (!this.miniMarkers || !init) return;
+    const T = init.tile;
+    const g = this.miniMarkers;
+    g.clear();
+    for (const e of latestWorld) {
+      const px = (e.x + 0.5) * T;
+      const py = (e.y + 0.5) * T;
+      const isFocus = e.id === followId();
+      g.fillStyle(hex(e.color), 1);
+      g.fillCircle(px, py, isFocus ? 30 : 22);
+      if (isFocus) {
+        g.lineStyle(10, 0xffffff, 1);
+        g.strokeCircle(px, py, 30);
+      }
+    }
+    const view = this.cameras.main.worldView;
+    g.lineStyle(14, 0xffb454, 0.95); // draggable view rectangle — match the frame
+    g.strokeRect(view.x, view.y, view.width, view.height);
+  }
+
+  updateEntities(list: Entity[]) {
+    const T = init.tile;
+    const seen = new Set<string>();
+    for (const e of list) {
+      seen.add(e.id);
+      const px = (e.x + 0.5) * T;
+      const py = (e.y + 0.5) * T;
+      let a = this.avatars.get(e.id);
+      if (!a) {
+        const isFocus = e.id === followId();
+        const shadow = this.add.ellipse(0, 10, 22, 9, 0x000000, 0.28);
+        const circle = this.add.circle(0, 0, 12, hex(e.color));
+        circle.setStrokeStyle(2.5, isFocus ? 0xffffff : 0x11141f, 1);
+        const label = this.add
+          .text(0, -22, labelFor(e), {
+            fontFamily: "sans-serif",
+            fontSize: "11px",
+            color: "#ffffff",
+            fontStyle: "bold",
+            backgroundColor: "#11141fb0",
+            padding: { x: 5, y: 2 } as any,
+          })
+          .setOrigin(0.5);
+        const c = this.add.container(px, py, [shadow, circle, label]);
+        c.setDepth(10);
+        this.miniCam?.ignore(c); // minimap shows dots, not full avatars
+        a = { c, label };
+        this.avatars.set(e.id, a);
+        if (isFocus) {
+          this.focusContainer = c;
+          if (!this.following) {
+            this.following = true;
+            this.cameras.main.startFollow(c, true, 0.12, 0.12);
+          }
+        }
+      } else {
+        if (a.c.x !== px || a.c.y !== py) {
+          this.tweens.killTweensOf(a.c);
+          this.tweens.add({ targets: a.c, x: px, y: py, duration: 110, ease: "Linear" });
+        }
+        const want = labelFor(e);
+        if (a.label.text !== want) a.label.setText(want);
+      }
+    }
+    for (const [id, a] of this.avatars) {
+      if (!seen.has(id)) {
+        a.c.destroy();
+        this.avatars.delete(id);
+      }
+    }
+  }
+}
+
+// ---------- DOM panel ----------
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+function addMsg(opts: { who: string; text: string; room?: string; cls?: string; skill?: string }) {
+  const log = $<HTMLDivElement>("chat-log");
+  const div = document.createElement("div");
+  div.className = "msg " + (opts.cls || "");
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = opts.who;
+  div.appendChild(who);
+  if (opts.room) {
+    const tag = document.createElement("span");
+    tag.className = "room-tag";
+    tag.textContent = opts.room;
+    div.appendChild(tag);
+  }
+  if (opts.skill) {
+    const tag = document.createElement("span");
+    tag.className = "room-tag";
+    tag.textContent = "via " + opts.skill;
+    div.appendChild(tag);
+  }
+  const body = document.createElement("span");
+  body.className = "body";
+  body.textContent = opts.text;
+  div.appendChild(body);
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+const typingFrom = new Set<string>();
+function renderTyping() {
+  $<HTMLDivElement>("typing").textContent = typingFrom.size
+    ? [...typingFrom].join(", ") + (typingFrom.size > 1 ? " are" : " is") + " typing…"
+    : "";
+}
+
+function setAdminStatus(note: string, ok: boolean) {
+  const el = $<HTMLDivElement>("admin-status");
+  el.textContent = note;
+  el.className = ok ? "ok" : "err";
+}
+
+// Escape, then turn bare URLs into links.
+function renderRich(text: string): string {
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+
+function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {
+  const card = $<HTMLDivElement>("board-card");
+  if (!msg.roomId) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "block";
+  $<HTMLDivElement>("board-title").textContent = `📌 ${msg.room} board`;
+  const list = $<HTMLDivElement>("board-list");
+  list.innerHTML = "";
+  if (!msg.items?.length) {
+    const d = document.createElement("div");
+    d.className = "board-empty";
+    d.textContent = "Nothing pinned yet.";
+    list.appendChild(d);
+    return;
+  }
+  for (const item of msg.items) {
+    const d = document.createElement("div");
+    d.className = "board-item";
+    d.innerHTML = renderRich(item.text) + `<span class="meta">— ${item.by}, ${new Date(item.ts).toLocaleString()}</span>`;
+    list.appendChild(d);
+  }
+}
+
+function chatMode(): "private" | "speak" {
+  const el = document.querySelector<HTMLInputElement>('input[name="cmode"]:checked');
+  return el?.value === "speak" ? "speak" : "private";
+}
+
+function wirePanel() {
+  // Role switch (testing): reload with the chosen role.
+  const roleSel = $<HTMLSelectElement>("role-sel");
+  roleSel.value = ROLE;
+  roleSel.onchange = () => {
+    location.search = roleSel.value === "admin" ? "?role=admin" : "";
+  };
+  if (ROLE === "admin") {
+    $<HTMLDivElement>("role-sub").innerHTML =
+      "You are the <b>admin</b> — no avatar; your keyboard/mouse move <b>Terra</b>. Chat below is private to the TA or spoken as her.";
+    $<HTMLDivElement>("admin").style.display = "block";
+    $<HTMLDivElement>("chat-mode").style.display = "block";
+    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA privately, or speak as her (pick above)…";
+  }
+
+  const agentSel = $<HTMLSelectElement>("agent-sel");
+  for (const a of init.agents) {
+    const o = document.createElement("option");
+    o.value = a.key;
+    o.textContent = a.key === "ta" ? `${a.name} (virtual TA)` : `${a.name} (virtual student)`;
+    agentSel.appendChild(o);
+  }
+  agentSel.value = "ta";
+  const destSel = $<HTMLSelectElement>("dest-sel");
+  for (const r of init.rooms) {
+    const o = document.createElement("option");
+    o.value = r.id;
+    o.textContent = r.label;
+    destSel.appendChild(o);
+  }
+  destSel.value = "commons";
+  const boardSel = $<HTMLSelectElement>("board-sel");
+  for (const r of init.rooms.filter((r) => r.hasBoard)) {
+    const o = document.createElement("option");
+    o.value = r.id;
+    o.textContent = r.label;
+    boardSel.appendChild(o);
+  }
+
+  const send = () => {
+    const input = $<HTMLInputElement>("chat-input");
+    const text = input.value.trim();
+    if (!text) return;
+    room.send("chat", ROLE === "admin" ? { text, mode: chatMode() } : { text });
+    input.value = "";
+  };
+  $<HTMLButtonElement>("chat-send").onclick = send;
+  $<HTMLInputElement>("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") send();
+  });
+
+  $<HTMLButtonElement>("direct-send").onclick = () => {
+    room.send("admin", { action: "direct", agent: agentSel.value, instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
+  };
+  $<HTMLButtonElement>("compose-post").onclick = () => {
+    room.send("admin", { action: "compose", instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
+  };
+  $<HTMLButtonElement>("quick-paper").onclick = () => {
+    room.send("admin", {
+      action: "compose",
+      instruction:
+        "Share one interesting recent AI paper or piece of AI news for the class board. Give the title and a 2-3 sentence plain-language summary of why it matters for a course on LLM agents.",
+    });
+  };
+
+  // Post preview: composed by the TA brain; editable; pinned on approval.
+  room.onMessage("postPreview", (msg: { from: string; text: string; boards: { id: string; label: string }[]; suggested: string }) => {
+    $<HTMLTextAreaElement>("preview-text").value = msg.text;
+    boardSel.value = msg.suggested;
+    $<HTMLDivElement>("preview").style.display = "block";
+  });
+  $<HTMLButtonElement>("preview-send").onclick = () => {
+    const text = $<HTMLTextAreaElement>("preview-text").value.trim();
+    if (!text) return;
+    room.send("admin", { action: "post", board: boardSel.value, text });
+    $<HTMLDivElement>("preview").style.display = "none";
+  };
+  $<HTMLButtonElement>("preview-discard").onclick = () => {
+    $<HTMLDivElement>("preview").style.display = "none";
+    setAdminStatus("Post discarded.", true);
+  };
+
+  $<HTMLButtonElement>("send-agent").onclick = () => {
+    room.send("admin", { action: "send", agent: agentSel.value, dest: destSel.value });
+  };
+
+  // Lecturer mic → class transcript in the TA brain (Chrome Web Speech).
+  const micBtn = $<HTMLButtonElement>("mic-toggle");
+  const micState = $<HTMLSpanElement>("mic-state");
+  const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  let rec: any = null;
+  let micOn = false;
+  micBtn.onclick = () => {
+    if (!SR) {
+      micState.textContent = "needs Chrome (Web Speech API)";
+      return;
+    }
+    if (micOn) {
+      micOn = false;
+      rec?.stop();
+      micBtn.textContent = "🎤 Mic: off";
+      micBtn.classList.remove("on");
+      micState.textContent = "";
+      return;
+    }
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = "en-US";
+    rec.onresult = (e: any) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          const t = String(e.results[i][0].transcript || "").trim();
+          if (t) room.send("mic", { text: t });
+        }
+      }
+    };
+    rec.onerror = (e: any) => {
+      micState.textContent = `mic error: ${e.error || "unknown"}`;
+    };
+    rec.onend = () => {
+      if (micOn) rec.start(); // keep listening through pauses
+    };
+    rec.start();
+    micOn = true;
+    micBtn.textContent = "🎤 Mic: LIVE";
+    micBtn.classList.add("on");
+    micState.textContent = "lecture is being transcribed to the TA brain";
+  };
+}
+
+// ---------- boot ----------
+
+async function main() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const client = new Client(`${proto}://${location.host}`);
+  room = await client.joinOrCreate("main", ROLE === "admin" ? { role: "admin" } : { name: "Jade" });
+
+  room.onMessage("world", (msg: { entities: Entity[] }) => {
+    latestWorld = msg.entities;
+    scene?.updateEntities(latestWorld);
+  });
+
+  room.onMessage("chat", (msg: { from: string; id: string; kind: string; text: string; room: string; skill?: string }) => {
+    typingFrom.delete(msg.from);
+    renderTyping();
+    const mine = msg.id === init?.you || msg.id === "admin";
+    addMsg({
+      who: msg.from,
+      text: msg.text,
+      room: msg.room,
+      skill: msg.skill,
+      cls: (msg.room === "private" ? "private " : "") + (mine ? "me" : msg.kind === "agent" ? "agent" : ""),
+    });
+  });
+
+  room.onMessage("board", renderBoard);
+
+  room.onMessage("typing", (msg: { name: string }) => {
+    typingFrom.add(msg.name);
+    renderTyping();
+    setTimeout(() => {
+      typingFrom.delete(msg.name);
+      renderTyping();
+    }, 45000);
+  });
+
+  room.onMessage("adminAck", (msg: { ok: boolean; note: string }) => setAdminStatus(msg.note, msg.ok));
+
+  room.onMessage("init", (msg: InitMsg) => {
+    init = msg;
+    wirePanel();
+    addMsg({
+      who: "system",
+      text:
+        ROLE === "admin"
+          ? "Connected as admin. You're driving Terra — walk her somewhere and talk to her below."
+          : "Connected. You're in your office — walk out through the door to the halls.",
+      cls: "sys",
+    });
+    new Phaser.Game({
+      type: Phaser.AUTO,
+      parent: "game",
+      backgroundColor: "#0f1320",
+      // Fill the container and follow window resizes — no fixed viewport.
+      scale: { mode: Phaser.Scale.RESIZE, width: "100%", height: "100%" },
+      scene: WorldScene,
+    });
+  });
+
+  // Small debug hook (useful for scripted testing; harmless to keep).
+  (window as any).vs = {
+    step: (dx: number, dy: number) => room.send("step", { dx, dy }),
+    goto: (x: number, y: number) => room.send("goto", { x, y }),
+    chat: (text: string) => room.send("chat", { text }),
+    world: () => latestWorld,
+  };
+}
+
+main().catch((err) => {
+  addMsg({ who: "system", text: "Failed to connect: " + err, cls: "sys" });
+  console.error(err);
+});

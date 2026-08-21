@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual TA</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1c2330; --muted: #62708a;
+    --line: #e4e8ef; --accent: #3b6cff; --accent-soft: #eaf0ff;
+    --live: #d92d20; --shadow: 0 1px 3px rgba(20,30,50,.06), 0 8px 24px rgba(20,30,50,.05);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
+  .badge {
+    font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); text-transform: capitalize;
+  }
+  .spacer { flex: 1; }
+  select, .mic {
+    font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--card);
+    color: var(--ink); padding: 7px 12px; border-radius: 9px; cursor: pointer;
+  }
+  .mic { font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .mic .dot { width: 8px; height: 8px; border-radius: 50%; background: #c3ccda; }
+  .mic.on { border-color: var(--live); color: var(--live); }
+  .mic.on .dot { background: var(--live); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  main { flex: 1; overflow-y: auto; padding: 22px 0; }
+  .thread { max-width: 780px; margin: 0 auto; padding: 0 20px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 82%; padding: 11px 15px; border-radius: 14px; font-size: 14.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+  .msg.ta { align-self: flex-start; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); border-bottom-left-radius: 5px; }
+  .msg.ta .skill { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: block; margin-bottom: 5px; }
+  .msg.ta a { color: var(--accent); }
+  .msg.ta code { background: #eef1f6; border: 1px solid #dde3ec; border-radius: 5px; padding: 1px 5px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; }
+  .msg.ta pre { background: #0f1729; color: #cdd6e4; border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+  .msg.ta pre code { background: transparent; border: none; color: inherit; padding: 0; }
+  .msg.thinking { color: var(--muted); font-style: italic; }
+  .artifact { margin-top: 8px; font-size: 13px; }
+
+  footer { padding: 14px 20px 18px; background: var(--card); border-top: 1px solid var(--line); }
+  form { max-width: 780px; margin: 0 auto; display: flex; gap: 10px; }
+  input[type=text] {
+    flex: 1; font: inherit; font-size: 14.5px; padding: 11px 15px;
+    border: 1px solid var(--line); border-radius: 12px; outline: none; background: var(--bg);
+  }
+  input[type=text]:focus { border-color: var(--accent); background: #fff; }
+  button.send {
+    font: inherit; font-size: 14px; font-weight: 700; border: none; border-radius: 12px;
+    background: var(--accent); color: #fff; padding: 11px 20px; cursor: pointer;
+  }
+  button.send:disabled { opacity: .5; cursor: default; }
+  .hint { max-width: 780px; margin: 8px auto 0; font-size: 11.5px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Virtual TA</h1>
+  <span class="badge" id="mode">ready</span>
+  <span class="spacer"></span>
+  <select id="reading" title="Assigned readings"><option value="">Pick a reading…</option></select>
+  <button class="mic" id="mic" type="button" title="Classroom listening (live lecture transcription)">
+    <span class="dot"></span><span id="micLabel">Classroom listening</span>
+  </button>
+</header>
+
+<main><div class="thread" id="thread">
+  <div class="msg ta"><span class="skill">virtual ta</span>Hi! I'm your Virtual TA. I can <strong>coach</strong> you through an assigned reading, help during a <strong>live class</strong> (flip on listening), draft <strong>notes or HTML slides</strong>, <strong>review a PR</strong> on the shared project, or compose a <strong>class announcement</strong> from a news link. What are we doing today?</div>
+</div></main>
+
+<footer>
+  <form id="form">
+    <input type="text" id="input" placeholder="Message the TA… (/coach /notes /slides /review /announce to force a mode)" autocomplete="off" autofocus>
+    <button class="send" id="send" type="submit">Send</button>
+  </form>
+  <div class="hint">Runs locally · the router picks the right skill and asks when unsure · mic uses your browser's speech recognition (Chrome)</div>
+</footer>
+
+<script>
+const sessionId = crypto.randomUUID();
+const thread = document.getElementById("thread");
+const form = document.getElementById("form");
+const input = document.getElementById("input");
+const send = document.getElementById("send");
+const modeBadge = document.getElementById("mode");
+const readingSel = document.getElementById("reading");
+const micBtn = document.getElementById("mic");
+const micLabel = document.getElementById("micLabel");
+
+// --- materials picker ---
+fetch("/api/materials").then(r => r.json()).then(({ readings }) => {
+  for (const r of readings) {
+    const opt = document.createElement("option");
+    opt.value = r.id; opt.textContent = r.title;
+    readingSel.appendChild(opt);
+  }
+}).catch(() => {});
+
+// --- chat ---
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function render(md) {
+  // minimal markdown: fenced code, inline code, bold, links
+  let html = esc(md);
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre><code>${c}</code></pre>`);
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(https?:\/\/[^\s)]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return html;
+}
+function addMsg(cls, html) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.innerHTML = html;
+  thread.appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  return div;
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  addMsg("user", esc(message));
+  const pending = addMsg("ta thinking", "thinking…");
+  send.disabled = true;
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId, message, readingId: readingSel.value || undefined }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    pending.classList.remove("thinking");
+    let html = `<span class="skill">${esc(data.skill || "ta")}</span>` + render(data.reply);
+    for (const a of data.artifacts || []) {
+      html += `<div class="artifact">📄 ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${esc(a.url)}</a>` : esc(a.path)}</div>`;
+    }
+    pending.innerHTML = html;
+    if (data.skill && data.skill !== "clarify") modeBadge.textContent = data.skill;
+  } catch (err) {
+    pending.classList.remove("thinking");
+    pending.innerHTML = `<span class="skill">error</span>${esc(err.message)}`;
+  } finally {
+    send.disabled = false;
+    pending.scrollIntoView({ behavior: "smooth", block: "end" });
+    input.focus();
+  }
+});
+
+// --- classroom listening (Web Speech API) ---
+let recognition = null;
+let listening = false;
+
+function postListen(body) {
+  return fetch("/api/listen", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId, ...body }),
+  }).catch(() => {});
+}
+
+micBtn.addEventListener("click", () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert("Live transcription needs Chrome / a Chromium browser (Web Speech API)."); return; }
+  if (!listening) {
+    recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) postListen({ text: e.results[i][0].transcript });
+      }
+    };
+    recognition.onend = () => { if (listening) recognition.start(); }; // auto-restart
+    recognition.start();
+    listening = true;
+    micBtn.classList.add("on");
+    micLabel.textContent = "Listening to class…";
+    modeBadge.textContent = "classroom";
+    postListen({ active: true });
+  } else {
+    listening = false;
+    recognition?.stop();
+    micBtn.classList.remove("on");
+    micLabel.textContent = "Classroom listening";
+    postListen({ active: false });
+  }
+});
+</script>
+</body>
+</html>

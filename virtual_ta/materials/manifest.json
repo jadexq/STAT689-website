@@ -1,0 +1,10 @@
+{
+  "readings": [
+    {
+      "id": "attention-intro",
+      "title": "A Gentle Introduction to Attention and Transformers",
+      "file": "attention-intro.md",
+      "link": "https://example.edu/readings/attention-intro"
+    }
+  ]
+}
