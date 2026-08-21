@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 import { createServer } from "http";
 import express from "express";
+import compression from "compression";
 import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MainRoom } from "./rooms/MainRoom";
@@ -16,6 +17,9 @@ import { identityMode } from "./identity";
 const PORT = Number(process.env.PORT || 2567);
 
 const app = express();
+// gzip before static: the Phaser bundle is ~1.2 MB minified and ~0.34 MB
+// gzipped, and Cloud Run's free tier allows only 1 GiB of egress a month.
+app.use(compression());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "client", "static")));
 

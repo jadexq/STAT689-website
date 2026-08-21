@@ -55,14 +55,24 @@ export interface LoggedTurn {
   ts: string;
   run: string;
   sessionId: string;
+  email?: string | null;
+  name?: string | null;
   role: "user" | "assistant";
   skill: string | null;
   readingId?: string | null;
   content: string;
 }
 
+// `email` and `name` are denormalised onto every turn deliberately: this
+// file IS the record of a student's conversation, and it should be
+// readable without knowing that a sessionId is `space:<email>` (or
+// `space:admin:<email>`). A later roster correction will not rewrite old
+// turns, which is the right behaviour for a historical record. Absent for
+// turns from the TA's own web UI, which has no identity behind it.
 export async function logTurn(entry: {
   sessionId: string;
+  email?: string | null;
+  name?: string | null;
   role: "user" | "assistant";
   skill: string | null;
   readingId?: string | null;

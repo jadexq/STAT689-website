@@ -11,13 +11,31 @@ export interface TaChatResult {
   data?: Record<string, unknown> | null;
 }
 
+// Who is speaking, so the TA can write it onto the turn it logs. The
+// conversation log is the course's durable record; it should name the
+// student rather than make the reader decode a session key.
+export interface TaWho {
+  sessionId: string;
+  email: string;
+  name: string;
+}
+
 // One chat turn with the brain. `skill` (optional) bypasses the TA's
 // intent router — used for the room-based modes (classroom/prep/broadcast).
-export async function taChat(sessionId: string, message: string, skill?: string): Promise<TaChatResult> {
+export async function taChat(
+  who: TaWho,
+  message: string,
+  skill?: string,
+): Promise<TaChatResult> {
   const res = await fetch(`${TA_BASE}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, message, ...(skill ? { skill } : {}) }),
+    body: JSON.stringify({
+      sessionId: who.sessionId,
+      message,
+      who: { email: who.email, name: who.name },
+      ...(skill ? { skill } : {}),
+    }),
     signal: AbortSignal.timeout(180_000),
   });
   if (!res.ok) {

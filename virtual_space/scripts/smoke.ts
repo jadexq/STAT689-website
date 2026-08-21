@@ -48,6 +48,12 @@ async function main() {
 
   student.onMessage("init", (m) => (init = m));
   student.onMessage("world", (m) => (world = m));
+  // Movement arrives as a delta now (see MainRoom.broadcastMove); the full
+  // roster only comes on joins, leaves and teleports.
+  student.onMessage("moved", (m: { id: string; x: number; y: number }) => {
+    const e = world.entities.find((x) => x.id === m.id);
+    if (e) { e.x = m.x; e.y = m.y; }
+  });
   student.onMessage("chat", (m) => {
     chats.push(m);
     console.log(`  [chat/${m.room}${m.skill ? ` · via ${m.skill}` : ""}] ${m.from}: ${m.text.slice(0, 120)}`);
@@ -92,6 +98,7 @@ async function main() {
   const admin: Room = await client.joinOrCreate("main", { devUser: "jade@local", role: "admin" });
   admin.onMessage("init", () => {});
   admin.onMessage("world", () => {});
+  admin.onMessage("moved", () => {});
   admin.onMessage("board", () => {});
   admin.onMessage("chat", () => {});
   admin.onMessage("typing", () => {});

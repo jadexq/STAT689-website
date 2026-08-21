@@ -180,6 +180,7 @@ class WorldScene extends Phaser.Scene {
         addMsg({ who: "system", text: `${target.label} is under construction — you can't go in yet.`, cls: "sys" });
         return;
       }
+      if (idleParked) return;
       room.send("goto", { x: tx, y: ty });
     });
     this.input.on("pointermove", (ptr: Phaser.Input.Pointer) => {
@@ -335,6 +336,7 @@ class WorldScene extends Phaser.Scene {
 
   update(time: number) {
     this.drawMiniMarkers();
+    if (idleParked) return;
     if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
     if (time - this.lastStep < 140) return;
     let dx = 0;
@@ -663,7 +665,10 @@ function wirePanel() {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           const t = String(e.results[i][0].transcript || "").trim();
-          if (t) room.send("mic", { text: t });
+          if (t) {
+            markActive(); // talking through the mic counts, even hands-off
+            room.send("mic", { text: t });
+          }
         }
       }
     };
@@ -695,11 +700,91 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let booted = false; // the Phaser game is created once, never on reconnect
 let leaving = false; // set when WE are closing the connection on purpose
 
+// ---------- idle disconnect ----------
+// Cloud Run bills an instance for as long as ANY WebSocket is open, idle or
+// not. A laptop left open over a weekend is ~48 hours of billed time against
+// a free-tier budget of roughly 50 hours a month, and the reconnect logic
+// below would otherwise keep such a tab alive indefinitely. So after
+// IDLE_MS without deliberate activity we close the socket on purpose and
+// wait for an explicit click. Mouse movement does not count as activity;
+// keys, clicks, scrolling and mic chunks do.
+const IDLE_MS = 15 * 60 * 1000;
+let lastActivity = Date.now();
+let idleParked = false;
+
+function markActive() {
+  lastActivity = Date.now();
+}
+for (const ev of ["keydown", "mousedown", "wheel", "touchstart"]) {
+  window.addEventListener(ev, markActive, { passive: true });
+}
+
+function showIdleOverlay(onRejoin: () => void) {
+  const wrap = document.createElement("div");
+  wrap.id = "idle-overlay";
+  wrap.setAttribute(
+    "style",
+    "position:fixed;inset:0;z-index:9999;display:flex;align-items:center;" +
+      "justify-content:center;background:#11141fd8;backdrop-filter:blur(2px)",
+  );
+  const card = document.createElement("div");
+  card.setAttribute(
+    "style",
+    "background:#232946;color:#fff;padding:1.5rem 1.75rem;border-radius:10px;" +
+      "font-family:sans-serif;text-align:center;max-width:22rem;box-shadow:0 8px 30px #0008",
+  );
+  const p1 = document.createElement("p");
+  p1.setAttribute("style", "margin:0 0 .35rem;font-weight:700");
+  p1.textContent = "Disconnected after 15 minutes of inactivity";
+  const p2 = document.createElement("p");
+  p2.setAttribute("style", "margin:0 0 1rem;font-size:.85rem;opacity:.8");
+  p2.textContent = "The campus stops running when nobody is using it. Your conversation is saved.";
+  const btn = document.createElement("button");
+  btn.textContent = "Rejoin";
+  btn.setAttribute(
+    "style",
+    "background:#6b7cff;color:#fff;border:0;border-radius:6px;padding:.5rem 1.25rem;" +
+      "font-size:1rem;cursor:pointer",
+  );
+  btn.addEventListener("click", onRejoin);
+  card.append(p1, p2, btn);
+  wrap.appendChild(card);
+  document.body.appendChild(wrap);
+  btn.focus();
+}
+
+function startIdleWatch(client: Client) {
+  setInterval(() => {
+    if (idleParked || !room) return;
+    if (Date.now() - lastActivity < IDLE_MS) return;
+    idleParked = true;
+    leaving = true;
+    void Promise.resolve(room.leave(true)).catch(() => {});
+    showIdleOverlay(() => void rejoinFromIdle(client));
+  }, 30_000);
+}
+
+async function rejoinFromIdle(client: Client) {
+  document.getElementById("idle-overlay")?.remove();
+  markActive();
+  try {
+    room = await client.joinOrCreate("main", JOIN_OPTS());
+    idleParked = false;
+    leaving = false;
+    wireRoom(client);
+    addMsg({ who: "system", text: "Rejoined.", cls: "sys" });
+  } catch (err) {
+    showIdleOverlay(() => void rejoinFromIdle(client));
+    addMsg({ who: "system", text: "Could not rejoin: " + err, cls: "sys" });
+  }
+}
+
 async function main() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const client = new Client(`${proto}://${location.host}`);
   room = await client.joinOrCreate("main", JOIN_OPTS());
   wireRoom(client);
+  startIdleWatch(client);
 
   // Small debug hook (useful for scripted testing; harmless to keep).
   (window as any).vs = {
@@ -715,6 +800,17 @@ async function main() {
 function wireRoom(client: Client) {
   room.onMessage("world", (msg: { entities: Entity[] }) => {
     latestWorld = msg.entities;
+    scene?.updateEntities(latestWorld);
+  });
+
+  // A single entity stepped one tile. The full roster only arrives on
+  // joins, leaves and teleports; everything in between is a delta.
+  // An id we have never seen is ignored — the next full world fixes it.
+  room.onMessage("moved", (msg: { id: string; x: number; y: number }) => {
+    const e = latestWorld.find((x) => x.id === msg.id);
+    if (!e) return;
+    e.x = msg.x;
+    e.y = msg.y;
     scene?.updateEntities(latestWorld);
   });
 

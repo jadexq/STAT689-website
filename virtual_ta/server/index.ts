@@ -5,6 +5,7 @@
 // PR review) GitHub.
 
 import express from "express";
+import compression from "compression";
 import path from "node:path";
 import { llmInfo } from "./llm.ts";
 import { listReadings } from "./materials.ts";
@@ -40,6 +41,7 @@ const skills: Record<SkillName, (s: Session, m: string) => Promise<SkillResult>>
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use(compression());
 app.use(express.static(path.join(ROOT, "client")));
 app.use("/output", express.static(OUTPUT_DIR));
 
@@ -75,16 +77,19 @@ app.post("/api/listen", async (req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { sessionId, message, readingId, skill: forcedSkill } = req.body ?? {};
+  const { sessionId, message, readingId, skill: forcedSkill, who } = req.body ?? {};
   if (typeof sessionId !== "string" || typeof message !== "string" || !message.trim()) {
     res.status(400).json({ error: "sessionId and message required" });
     return;
   }
+  // The virtual space knows who is speaking; the TA's own web UI does not.
+  const email = typeof who?.email === "string" ? who.email : null;
+  const name = typeof who?.name === "string" ? who.name : null;
   const session = await ensureSession(sessionId);
   if (typeof readingId === "string" && readingId) session.readingId = readingId;
 
   pushHistory(session, "user", message);
-  await logTurn({ sessionId, role: "user", skill: session.mode, readingId: session.readingId, content: message });
+  await logTurn({ sessionId, email, name, role: "user", skill: session.mode, readingId: session.readingId, content: message });
 
   // An explicit, valid skill (e.g. from the virtual space's room-based
   // modes) bypasses the router; otherwise route as usual.
@@ -107,7 +112,7 @@ app.post("/api/chat", async (req, res) => {
   }
 
   pushHistory(session, "assistant", result.reply);
-  await logTurn({ sessionId, role: "assistant", skill, readingId: session.readingId, content: result.reply });
+  await logTurn({ sessionId, email, name, role: "assistant", skill, readingId: session.readingId, content: result.reply });
 
   res.json({ reply: result.reply, skill, artifacts: result.artifacts ?? [], data: result.data ?? null });
 });

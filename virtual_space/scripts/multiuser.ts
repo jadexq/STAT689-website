@@ -26,7 +26,12 @@ type Init = { you: string | null; role: string; isAdmin: boolean; email: string;
 
 const URL = process.env.VS_URL || "ws://localhost:2567";
 // Where the TA brain keeps one file per conversation (see virtual_ta/server/logger.ts).
-const TA_LOGS = path.join(__dirname, "..", "..", "virtual_ta", "data", "logs");
+// Where the TA writes conversation files. Defaults to the sibling project,
+// which is right when both servers run from source; set TA_LOGS_DIR when the
+// servers are in a container and you are reaching them over VS_URL.
+const TA_LOGS =
+  process.env.TA_LOGS_DIR?.trim() ||
+  path.join(__dirname, "..", "..", "virtual_ta", "data", "logs");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -61,6 +66,10 @@ async function join(client: Client, devUser: string, role?: "admin"): Promise<Jo
   j.room = await client.joinOrCreate("main", { devUser, ...(role ? { role } : {}) });
   j.room.onMessage("init", (m: Init) => (j.init = m));
   j.room.onMessage("world", (m: { entities: Entity[] }) => (j.world = m.entities));
+  j.room.onMessage("moved", (m: { id: string; x: number; y: number }) => {
+    const e = j.world.find((x) => x.id === m.id);
+    if (e) { e.x = m.x; e.y = m.y; }
+  });
   j.room.onMessage("chat", (m) => j.chats.push(m));
   j.room.onMessage("adminAck", (m) => j.acks.push(m));
   j.room.onMessage("board", () => {});

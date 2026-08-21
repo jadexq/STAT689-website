@@ -54,9 +54,17 @@ Then open **http://localhost:2567**.
   with backoff. Cloud Run cuts every connection at 60 minutes, so a long
   class will hit this. It also makes the tests non-idempotent inside that
   window: restart the space server between runs.
-- **Logs:** every move, chat, post, and admin action goes to
-  `data/session-<timestamp>.jsonl`; lecture transcript and announcements
-  persist on the TA side under `../virtual_ta/data/class/`.
+- **Logs:** joins, chat, posts and admin actions go to
+  `data/session-<timestamp>.jsonl`. **Movement is deliberately not logged** —
+  it was ~30,000 rows a class, nothing ever read them back, and the record
+  that matters is the student's conversation with the TA. That one lives on
+  the TA side, one file per person: `../virtual_ta/data/logs/space_<email>.jsonl`,
+  with the student's name and email on every turn.
+- **Idle tabs disconnect after 15 minutes** and offer a Rejoin button.
+  Cloud Run bills an instance for as long as *any* WebSocket is open, so a
+  laptop left open over a weekend would otherwise cost ~48 hours against a
+  free-tier budget of about 50 a month. Keys, clicks, scrolling and mic
+  audio all count as activity; mouse movement does not.
 
 ## Configuration
 
@@ -82,9 +90,11 @@ npx tsx scripts/multiuser.ts    # two identities coexist; admin is granted,
                                 # not claimed; separate TA conversations
 ```
 
-Both need the two servers running and a **fresh** space server (agents
-keep their positions between client connections), and make a few real
-LLM calls. Last full pass: 2026-07-07.
+All three need the two servers running and a **fresh** space server (agents
+keep their positions between client connections), and make a few real LLM
+calls. To run them against the container instead, set `VS_URL=ws://localhost:8080`
+and `TA_LOGS_DIR` to wherever that container's `ta/logs` is readable.
+Last full pass: 2026-08-21.
 
 ## Layout
 

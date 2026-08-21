@@ -25,7 +25,7 @@ import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
 import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, forcedSkillAt, findPath } from "../map";
 import { AGENTS, TERRA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
-import { taChat, taListen } from "../ta";
+import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
 import { logEvent } from "../logger";
 import { identify, type Identity } from "../identity";
@@ -49,7 +49,7 @@ interface AgentRuntime extends Entity {
 interface Sender {
   name: string;
   text: string;
-  sessionKey?: string;
+  who?: TaWho;
 }
 
 const HISTORY_LIMIT = 30;
@@ -188,9 +188,14 @@ export class MainRoom extends Room {
   // across reconnects, restarts and cold starts — hence the email, not the
   // Colyseus sessionId. The instructor's private line to Terra is a
   // separate conversation from the same person's student-side chat.
-  private taSessionKey(client: Client, kind: "student" | "admin" = "student"): string {
-    const email = this.identities.get(client.sessionId)?.email || "unknown";
-    return kind === "admin" ? `space:admin:${email}` : `space:${email}`;
+  private taWho(client: Client, kind: "student" | "admin" = "student"): TaWho {
+    const id = this.identities.get(client.sessionId);
+    const email = id?.email || "unknown";
+    return {
+      sessionId: kind === "admin" ? `space:admin:${email}` : `space:${email}`,
+      email,
+      name: id?.name || "unknown",
+    };
   }
 
   // ---------- movement ----------
@@ -207,8 +212,7 @@ export class MainRoom extends Room {
     if (!walkable(nx, ny)) return;
     e.x = nx;
     e.y = ny;
-    logEvent("move", { who: e.name, id: e.id, x: nx, y: ny, room: roomAt(nx, ny) });
-    this.broadcastWorld();
+    this.broadcastMove(e);
   }
 
   private handleGoto(client: Client, msg: any) {
@@ -233,8 +237,7 @@ export class MainRoom extends Room {
       const step = path[i++];
       entity.x = step.x;
       entity.y = step.y;
-      logEvent("move", { who: entity.name, id: entity.id, x: step.x, y: step.y, room: roomAt(step.x, step.y) });
-      this.broadcastWorld();
+      this.broadcastMove(entity);
     }, stepMs);
     this.walkers.set(entity.id, handle);
   }
@@ -267,7 +270,7 @@ export class MainRoom extends Room {
     this.pushHistory(rid, { name: p.name, text });
     this.deliverToRoom(rid, { from: p.name, id: p.id, kind: "human", text });
     logEvent("chat", { who: p.name, room: rid, text });
-    this.scheduleReplies(rid, { name: p.name, text, sessionKey: this.taSessionKey(client) });
+    this.scheduleReplies(rid, { name: p.name, text, who: this.taWho(client) });
   }
 
   // Agents in the room reply: Terra always (the brain), then at most
@@ -295,7 +298,8 @@ export class MainRoom extends Room {
         // Terra answers with the real Virtual TA brain, one persistent TA
         // session per student. The room she stands in may force a skill.
         const forced = forcedSkillAt(agent.x, agent.y);
-        const res = await taChat(sender.sessionKey ?? `space:${sender.name}`, sender.text, forced);
+        const who = sender.who ?? { sessionId: `space:${sender.name}`, email: "", name: sender.name };
+        const res = await taChat(who, sender.text, forced);
         text = res.reply;
         skill = res.skill;
       } else {
@@ -333,7 +337,7 @@ export class MainRoom extends Room {
     client.send("typing", { name: terra.name });
     try {
       const forced = forcedSkillAt(terra.x, terra.y);
-      const res = await taChat(this.taSessionKey(client, "admin"), text, forced);
+      const res = await taChat(this.taWho(client, "admin"), text, forced);
       client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
       logEvent("chat", { who: terra.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
@@ -407,7 +411,7 @@ export class MainRoom extends Room {
       client.send("adminAck", { ok: true, note: "Terra is composing the post…" });
       logEvent("admin_compose", { instruction });
       try {
-        const res = await taChat(this.taSessionKey(client, "admin"), instruction, "announce");
+        const res = await taChat(this.taWho(client, "admin"), instruction, "announce");
         const text = String(res.data?.announcement || res.reply);
         const boardsAvail = ROOMS.filter((r) => r.hasBoard).map((r) => ({ id: r.id, label: r.label }));
         const terraRoom = roomAt(terra.x, terra.y);
@@ -507,6 +511,16 @@ export class MainRoom extends Room {
   }
 
   // ---------- helpers ----------
+
+  // One entity moved one tile. Sending the whole roster for this is what
+  // made movement the dominant cost: 12 entities x 7 clients x ~7 steps a
+  // second is ~1 KB per step per client, and Cloud Run's free tier allows
+  // 1 GiB of egress a month. A delta is ~31 bytes. Joins, leaves and
+  // teleports still send the full world.
+  private broadcastMove(entity: { id: string; x: number; y: number }) {
+    this.broadcast("moved", { id: entity.id, x: entity.x, y: entity.y });
+    this.checkBoards();
+  }
 
   private broadcastWorld() {
     const entities: Entity[] = [
