@@ -3,11 +3,17 @@
 // same-room chat, runs agent replies, and logs everything. AI agents are
 // server-side "players" — same entity shape as a human, driven by an LLM.
 //
-// Roles (Part 6 · Update 2, temporary testing setup — no auth yet):
-//   student — has an avatar (Jade); normal chat & movement.
+// Identity is established server-side in onAuth (identity.ts) — from the
+// IAP header in the cloud, from a dev identity locally. Clients no longer
+// name themselves, and one email is one human.
+//
+// Roles:
+//   student — has an avatar; normal chat & movement.
 //   admin   — NO avatar; keyboard/mouse drive Terra; chat is either
 //             🔒 private to the TA brain or 🗣 spoken aloud as Terra.
 //             Admin-only: direct agents, compose/post board items, mic.
+//             Requested by the client, GRANTED only to an allowlisted
+//             instructor — a student asking for it just gets an avatar.
 //
 // Terra's replies come from the Virtual TA brain (ta.ts) with one session
 // per student; the room she stands in can force a skill. Board posts are
@@ -15,12 +21,14 @@
 // room's board — students see the board when they walk in (no global
 // fan-out anymore).
 
+import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
 import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, forcedSkillAt, findPath } from "../map";
 import { AGENTS, TERRA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen } from "../ta";
 import { getBoard, postToBoard } from "../boards";
 import { logEvent } from "../logger";
+import { identify, type Identity } from "../identity";
 
 export interface Entity {
   id: string;
@@ -36,15 +44,28 @@ interface AgentRuntime extends Entity {
   busy: boolean;
 }
 
+// Who an agent is replying to. sessionKey is the TA brain's conversation
+// key — absent when the "sender" is another agent (nobody's conversation).
+interface Sender {
+  name: string;
+  text: string;
+  sessionKey?: string;
+}
+
 const HISTORY_LIMIT = 30;
 const MAX_STUDENT_REPLIES = 2; // per human message — Terra is exempt
+// Cloud Run cuts every connection at 60 minutes and laptops sleep, so a
+// dropped socket is routine, not a departure. Hold the seat — and the
+// avatar, exactly where it was standing — for this long before cleaning up.
+const RECONNECT_WINDOW_S = 120;
 const TA_OFFLINE_MSG =
   "(my TA brain isn't reachable — is the Virtual TA server running? `npm run dev` in virtual_ta)";
 
 export class MainRoom extends Room {
   maxClients = 20;
   private players = new Map<string, Entity>();
-  private admins = new Set<string>(); // sessionIds of admin-role clients
+  private admins = new Set<string>(); // sessionIds granted the admin role
+  private identities = new Map<string, Identity>(); // sessionId -> who they are
   private agents: AgentRuntime[] = [];
   private history = new Map<string, HistoryEntry[]>(); // per map-room chat log
   private walkers = new Map<string, { clear: () => void }>(); // entity id -> active walk
@@ -77,18 +98,29 @@ export class MainRoom extends Room {
     logEvent("server_start", { agents: this.agents.map((a) => a.name) });
   }
 
-  onJoin(client: Client, options: any) {
-    const isAdmin = options?.role === "admin";
+  // Establishes WHO is connecting. Throwing here refuses the connection,
+  // which is the correct outcome when we are behind IAP and no verified
+  // identity arrived. `request` carries the IAP header on the WebSocket
+  // upgrade; `options.devUser` is honoured only outside IAP.
+  onAuth(_client: Client, options: any, request?: IncomingMessage): Identity {
+    return identify(request, options?.devUser);
+  }
+
+  onJoin(client: Client, options: any, auth?: Identity) {
+    const id = auth ?? (client.auth as Identity);
+    this.identities.set(client.sessionId, id);
+
+    // The admin role is requested by the client and granted by us.
+    const isAdmin = id.isAdmin && options?.role === "admin";
     if (isAdmin) {
       this.admins.add(client.sessionId);
-      logEvent("join", { who: "admin", id: client.sessionId, role: "admin" });
+      logEvent("join", { who: id.email, id: client.sessionId, role: "admin" });
     } else {
-      const name = String(options?.name || "Jade").slice(0, 24) || "Jade";
-      // A page reload (e.g. the role switch) can re-join before the old
-      // socket's close is processed, leaving a ghost avatar. One human
-      // identity per name: a rejoin replaces any stale entity.
+      // A page reload can re-join before the old socket's close is
+      // processed, leaving a ghost avatar. One avatar per email: a rejoin
+      // replaces the stale entity, while a DIFFERENT person is left alone.
       for (const [sid, old] of this.players) {
-        if (old.name === name) {
+        if (sid !== client.sessionId && this.identities.get(sid)?.email === id.email) {
           this.stopWalk(old.id);
           this.players.delete(sid);
           this.lastRoom.delete(sid);
@@ -97,14 +129,14 @@ export class MainRoom extends Room {
       const home = roomById("office-jade")!;
       const p: Entity = {
         id: client.sessionId,
-        name,
+        name: id.name,
         kind: "human",
         color: "#4da3ff",
         x: home.spawn.x,
         y: home.spawn.y,
       };
       this.players.set(client.sessionId, p);
-      logEvent("join", { who: name, id: client.sessionId, x: p.x, y: p.y, role: "student" });
+      logEvent("join", { who: id.email, name: id.name, id: client.sessionId, x: p.x, y: p.y, role: "student" });
     }
     client.send("init", {
       tile: TILE,
@@ -113,17 +145,31 @@ export class MainRoom extends Room {
       rooms: ROOMS,
       you: isAdmin ? null : client.sessionId,
       role: isAdmin ? "admin" : "student",
+      // So the client knows whether to offer the role switch at all.
+      isAdmin: id.isAdmin,
+      email: id.email,
+      name: id.name,
       agents: AGENTS.map((a) => ({ key: a.key, name: a.name })),
     });
     this.broadcastWorld();
   }
 
-  onLeave(client: Client) {
+  async onLeave(client: Client, consented?: boolean) {
     const p = this.players.get(client.sessionId);
+    if (!consented) {
+      try {
+        await this.allowReconnection(client, RECONNECT_WINDOW_S);
+        logEvent("rejoin", { who: p?.name ?? "admin", id: client.sessionId });
+        return; // seat resumed — nothing was ever cleaned up
+      } catch {
+        // window expired; fall through and tidy up
+      }
+    }
     if (p) logEvent("leave", { who: p.name, id: p.id });
     this.stopWalk(client.sessionId);
     this.players.delete(client.sessionId);
     this.admins.delete(client.sessionId);
+    this.identities.delete(client.sessionId);
     this.lastRoom.delete(client.sessionId);
     this.broadcastWorld();
   }
@@ -136,6 +182,15 @@ export class MainRoom extends Room {
 
   private terra(): AgentRuntime {
     return this.agents.find((a) => a.id === TERRA_ID)!;
+  }
+
+  // The TA brain keys conversations by this string, so it must be stable
+  // across reconnects, restarts and cold starts — hence the email, not the
+  // Colyseus sessionId. The instructor's private line to Terra is a
+  // separate conversation from the same person's student-side chat.
+  private taSessionKey(client: Client, kind: "student" | "admin" = "student"): string {
+    const email = this.identities.get(client.sessionId)?.email || "unknown";
+    return kind === "admin" ? `space:admin:${email}` : `space:${email}`;
   }
 
   // ---------- movement ----------
@@ -212,13 +267,13 @@ export class MainRoom extends Room {
     this.pushHistory(rid, { name: p.name, text });
     this.deliverToRoom(rid, { from: p.name, id: p.id, kind: "human", text });
     logEvent("chat", { who: p.name, room: rid, text });
-    this.scheduleReplies(rid, { name: p.name, text });
+    this.scheduleReplies(rid, { name: p.name, text, sessionKey: this.taSessionKey(client) });
   }
 
   // Agents in the room reply: Terra always (the brain), then at most
   // MAX_STUDENT_REPLIES virtual students — a room full of students must
   // not turn one "hello" into one LLM call per head.
-  private scheduleReplies(rid: string, sender: { name: string; text: string }) {
+  private scheduleReplies(rid: string, sender: Sender) {
     const present = this.agents.filter((a) => roomAt(a.x, a.y) === rid && !a.busy);
     const terra = present.find((a) => a.id === TERRA_ID);
     const students = present.filter((a) => a.id !== TERRA_ID).slice(0, MAX_STUDENT_REPLIES);
@@ -228,7 +283,7 @@ export class MainRoom extends Room {
     });
   }
 
-  private async agentRespond(agent: AgentRuntime, rid: string, sender: { name: string; text: string }) {
+  private async agentRespond(agent: AgentRuntime, rid: string, sender: Sender) {
     if (agent.busy) return;
     if (roomAt(agent.x, agent.y) !== rid) return; // moved away meanwhile
     agent.busy = true;
@@ -240,7 +295,7 @@ export class MainRoom extends Room {
         // Terra answers with the real Virtual TA brain, one persistent TA
         // session per student. The room she stands in may force a skill.
         const forced = forcedSkillAt(agent.x, agent.y);
-        const res = await taChat(`space:${sender.name}`, sender.text, forced);
+        const res = await taChat(sender.sessionKey ?? `space:${sender.name}`, sender.text, forced);
         text = res.reply;
         skill = res.skill;
       } else {
@@ -278,7 +333,7 @@ export class MainRoom extends Room {
     client.send("typing", { name: terra.name });
     try {
       const forced = forcedSkillAt(terra.x, terra.y);
-      const res = await taChat("space:admin", text, forced);
+      const res = await taChat(this.taSessionKey(client, "admin"), text, forced);
       client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
       logEvent("chat", { who: terra.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
@@ -309,7 +364,7 @@ export class MainRoom extends Room {
 
   private async handleAdmin(client: Client, msg: any) {
     if (!this.admins.has(client.sessionId)) {
-      return client.send("adminAck", { ok: false, note: "Admin only — switch role to Admin first." });
+      return client.send("adminAck", { ok: false, note: "Admin only — this account is not on the instructor list." });
     }
     const action = msg?.action;
 
@@ -352,7 +407,7 @@ export class MainRoom extends Room {
       client.send("adminAck", { ok: true, note: "Terra is composing the post…" });
       logEvent("admin_compose", { instruction });
       try {
-        const res = await taChat("space:admin", instruction, "announce");
+        const res = await taChat(this.taSessionKey(client, "admin"), instruction, "announce");
         const text = String(res.data?.announcement || res.reply);
         const boardsAvail = ROOMS.filter((r) => r.hasBoard).map((r) => ({ id: r.id, label: r.label }));
         const terraRoom = roomAt(terra.x, terra.y);

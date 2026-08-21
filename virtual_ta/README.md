@@ -10,6 +10,7 @@ Runs entirely on the instructor's laptop. Plan: Part 4 of
 npm install
 npm run dev        # http://localhost:3000  (watch mode; `npm start` without watch)
 npm run typecheck  # tsc --noEmit
+npx tsx scripts/memory.ts   # sessions survive a restart (no server, no LLM calls)
 ```
 
 Requires Node ≥ 23 (TypeScript runs natively — no build step). `.env` holds the
@@ -37,6 +38,23 @@ skill you want when a request is ambiguous.
 - Materials: drop readings (MD / TXT / HTML / PDF) into `materials/` and list them in `materials/manifest.json`.
 - Durable records: JSONL chat logs in `data/logs/`, digests in `data/digests/`, generated artifacts in `output/` (all git-ignored).
 - Behavioral improvements are documented in [`docs/improvements/`](docs/improvements/README.md) — old behavior, evidence logs, fix, verified new behavior, and design lessons.
+
+## Sessions and persistence
+
+A session is keyed by a **stable identity** — the virtual space sends
+`space:<email>` — so it means the same thing across restarts. In-memory
+sessions are therefore a cache, not the record:
+
+- every turn is appended to `data/logs/<session>.jsonl` as it happens;
+- `ensureSession()` rebuilds a missing session from that log, restoring the
+  recent history, the sticky mode, and the selected reading.
+
+This is what makes scale-to-zero survivable — on Cloud Run every quiet
+spell is a restart, and a student coming back after class should not have
+to reintroduce themselves. `scripts/memory.ts` checks it.
+
+`DATA_DIR` relocates `data/` and `output/` (a mounted GCS bucket in the
+cloud, since a container filesystem is ephemeral). Unset locally.
 
 ## Smoke test (headless)
 

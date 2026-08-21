@@ -3,3 +3,9 @@
 
 # Working design docs — kept local
 user_requirements/
+
+# Local container state (the DATA_DIR mount used by the docker run in README)
+.localdata/
+
+# Belt and braces — each project ignores its own .env, but never at the root either
+.env

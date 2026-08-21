@@ -5,13 +5,14 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { OUTPUT_DIR } from "../paths.ts";
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
 import { loadReading, matchReading } from "../materials.ts";
 import { transcriptText, type Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
 
-const OUTPUT_DIR = path.join(import.meta.dirname, "..", "..", "output");
+// output/ location comes from paths.ts (a GCS mount in the cloud)
 const DECK_RE = /\b(slide|slides|deck|presentation)\b/i;
 
 export async function author(session: Session, message: string): Promise<SkillResult> {

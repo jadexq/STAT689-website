@@ -26,7 +26,14 @@ export interface RoomDef {
   forcedSkill?: string;
   modeLabel?: string; // shown on the TA's avatar while she is in the room
   hasBoard?: boolean; // room has a bulletin board the TA can pin posts to
+  closed?: boolean; // room is sealed off (under construction); no way in
 }
+
+// TEMPORARY: the Classroom is closed while the classroom skill is being
+// reworked. While false the room is sealed (no door, so it is unreachable
+// by BFS or by walking), it forces no skill, and it is labelled 🚧.
+// Flip to true to reopen — nothing else needs to change here.
+export const CLASSROOM_OPEN = false;
 
 const OFFICE_TINT_A = "#2e3a54";
 const OFFICE_TINT_B = "#33405c";
@@ -40,7 +47,8 @@ export const ROOMS: RoomDef[] = [
   { id: "office-s5",  label: "Grace's Office", x1: 29, y1: 1, x2: 34, y2: 6, spawn: { x: 31, y: 3 }, tint: OFFICE_TINT_A, kind: "office" },
   { id: "office-jade", label: "Jade's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office" },
   // --- bottom band: special rooms + TA office (rows 14-19) ---
-  { id: "classroom",    label: "Classroom",    x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special", forcedSkill: "classroom", modeLabel: "in class" },
+  { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special",
+    ...(CLASSROOM_OPEN ? { forcedSkill: "classroom", modeLabel: "in class" } : { closed: true }) },
   { id: "prep-room",    label: "Prep Room",    x1: 10, y1: 14, x2: 16, y2: 19, spawn: { x: 13, y: 16 }, tint: "#2a4448", kind: "special", forcedSkill: "author", modeLabel: "prepping notes/slides" },
   { id: "library",      label: "Library",      x1: 18, y1: 14, x2: 25, y2: 19, spawn: { x: 21, y: 16 }, tint: "#4d3b20", kind: "special", forcedSkill: "announce", modeLabel: "at the library", hasBoard: true },
   { id: "computer-lab", label: "Computer Lab", x1: 27, y1: 14, x2: 33, y2: 19, spawn: { x: 30, y: 16 }, tint: "#233d52", kind: "special", forcedSkill: "review", modeLabel: "reviewing code", hasBoard: true },
@@ -59,8 +67,9 @@ const COMMONS_RECTS = [
 export const DOORS: { x: number; y: number }[] = [
   // offices → the hall
   { x: 3, y: 7 }, { x: 10, y: 7 }, { x: 17, y: 7 }, { x: 24, y: 7 }, { x: 31, y: 7 }, { x: 38, y: 7 },
-  // the hall → bottom rooms
-  { x: 4, y: 13 }, { x: 13, y: 13 }, { x: 21, y: 13 }, { x: 30, y: 13 }, { x: 38, y: 13 },
+  // the hall → bottom rooms (the Classroom door only exists while it is open)
+  ...(CLASSROOM_OPEN ? [{ x: 4, y: 13 }] : []),
+  { x: 13, y: 13 }, { x: 21, y: 13 }, { x: 30, y: 13 }, { x: 38, y: 13 },
 ];
 
 export const COLS = 43;

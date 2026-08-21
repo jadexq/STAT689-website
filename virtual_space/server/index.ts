@@ -11,6 +11,7 @@ import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MainRoom } from "./rooms/MainRoom";
 import { logFilePath } from "./logger";
+import { identityMode } from "./identity";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -27,5 +28,6 @@ gameServer.define("main", MainRoom);
 httpServer.listen(PORT, () => {
   console.log(`Virtual Space running at http://localhost:${PORT}`);
   console.log(`Session log: ${logFilePath()}`);
+  console.log(`Auth: ${identityMode()}`);
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });

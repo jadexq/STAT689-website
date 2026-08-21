@@ -4,10 +4,14 @@
 // file only sends intents (step/goto/chat/admin/mic) and renders what
 // the server broadcasts.
 //
-// Roles (temporary testing switch, no auth): "student" (you are Jade,
-// with an avatar) or "admin" (no avatar; keyboard/mouse drive Terra;
-// chat is 🔒 private-to-TA or 🗣 speak-as-TA). Picked via the dropdown,
-// which reloads the page with ?role=…
+// Identity comes from the SERVER (Google sign-in via IAP in the cloud, a
+// dev identity locally) — this file never says who you are. `?role=admin`
+// only *requests* the admin role; the server grants it to the instructor
+// and ignores it for everyone else, so the answer to "am I admin" is
+// whatever came back in `init`, never the URL.
+//
+// Roles: "student" (you have an avatar) or "admin" (no avatar;
+// keyboard/mouse drive Terra; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
 //
 // Rendering: the entire static world (checkered floors, shaded walls,
 // furniture, door thresholds) is drawn once into a single baked texture —
@@ -30,6 +34,7 @@ type RoomInfo = {
   forcedSkill?: string;
   modeLabel?: string;
   hasBoard?: boolean;
+  closed?: boolean;
 };
 type InitMsg = {
   tile: number;
@@ -38,11 +43,19 @@ type InitMsg = {
   rooms: RoomInfo[];
   you: string | null;
   role: "student" | "admin";
+  isAdmin: boolean; // may this account switch to admin at all?
+  email: string;
+  name: string;
   agents: { key: string; name: string }[];
 };
 
 const params = new URLSearchParams(location.search);
-const ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
+// What we ASK for. The server decides what we get (see `role` below).
+const WANT_ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
+// Local multi-user testing: ?as=ben@local. Ignored by the server behind IAP.
+const DEV_AS = params.get("as") || "";
+// What we actually ARE — filled in from init, so it cannot be faked here.
+let role: "student" | "admin" = "student";
 
 let room: Room;
 let init: InitMsg;
@@ -50,7 +63,7 @@ let scene: WorldScene | null = null;
 let latestWorld: Entity[] = [];
 
 const TERRA_ID = "agent-terra";
-const followId = () => (ROLE === "admin" ? TERRA_ID : init?.you);
+const followId = () => (role === "admin" ? TERRA_ID : init?.you);
 
 // ---------- color helpers ----------
 
@@ -158,7 +171,16 @@ class WorldScene extends Phaser.Scene {
         return;
       }
       this.refollow();
-      room.send("goto", { x: Math.floor(ptr.worldX / T), y: Math.floor(ptr.worldY / T) });
+      const tx = Math.floor(ptr.worldX / T);
+      const ty = Math.floor(ptr.worldY / T);
+      // A closed room is sealed (no door), so `goto` would find no path and
+      // silently do nothing. Say why, rather than looking broken.
+      const target = roomInfoAt(tx, ty);
+      if (target?.closed) {
+        addMsg({ who: "system", text: `${target.label} is under construction — you can't go in yet.`, cls: "sys" });
+        return;
+      }
+      room.send("goto", { x: tx, y: ty });
     });
     this.input.on("pointermove", (ptr: Phaser.Input.Pointer) => {
       if (this.miniDrag && ptr.isDown) this.panToMinimapPoint(ptr);
@@ -475,8 +497,12 @@ function setAdminStatus(note: string, ok: boolean) {
 }
 
 // Escape, then turn bare URLs into links.
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function renderRich(text: string): string {
-  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const esc = escapeHtml(text);
   return esc.replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 
@@ -505,19 +531,39 @@ function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: 
   }
 }
 
+// Post preview: composed by the TA brain; editable; pinned on approval.
+// Module-level (not closed over wirePanel's locals) so it can be re-wired
+// onto a fresh Room after a reconnect.
+function showPreview(msg: { from: string; text: string; boards: { id: string; label: string }[]; suggested: string }) {
+  $<HTMLTextAreaElement>("preview-text").value = msg.text;
+  $<HTMLSelectElement>("board-sel").value = msg.suggested;
+  $<HTMLDivElement>("preview").style.display = "block";
+}
+
 function chatMode(): "private" | "speak" {
   const el = document.querySelector<HTMLInputElement>('input[name="cmode"]:checked');
   return el?.value === "speak" ? "speak" : "private";
 }
 
 function wirePanel() {
-  // Role switch (testing): reload with the chosen role.
+  // Role switch: offered only to an instructor, so a student never sees a
+  // control they cannot use. (The server enforces this regardless.)
   const roleSel = $<HTMLSelectElement>("role-sel");
-  roleSel.value = ROLE;
-  roleSel.onchange = () => {
-    location.search = roleSel.value === "admin" ? "?role=admin" : "";
-  };
-  if (ROLE === "admin") {
+  const roleRow = roleSel.closest(".row") as HTMLDivElement | null;
+  if (init.isAdmin) {
+    roleSel.value = role;
+    roleSel.onchange = () => {
+      const q = new URLSearchParams(location.search);
+      if (roleSel.value === "admin") q.set("role", "admin");
+      else q.delete("role");
+      location.search = q.toString();
+    };
+  } else if (roleRow) {
+    roleRow.style.display = "none";
+  }
+  $<HTMLDivElement>("role-sub").innerHTML =
+    `You are <b>${escapeHtml(init.name)}</b> (${escapeHtml(init.email)}), a student.`;
+  if (role === "admin") {
     $<HTMLDivElement>("role-sub").innerHTML =
       "You are the <b>admin</b> — no avatar; your keyboard/mouse move <b>Terra</b>. Chat below is private to the TA or spoken as her.";
     $<HTMLDivElement>("admin").style.display = "block";
@@ -553,7 +599,7 @@ function wirePanel() {
     const input = $<HTMLInputElement>("chat-input");
     const text = input.value.trim();
     if (!text) return;
-    room.send("chat", ROLE === "admin" ? { text, mode: chatMode() } : { text });
+    room.send("chat", role === "admin" ? { text, mode: chatMode() } : { text });
     input.value = "";
   };
   $<HTMLButtonElement>("chat-send").onclick = send;
@@ -575,12 +621,6 @@ function wirePanel() {
     });
   };
 
-  // Post preview: composed by the TA brain; editable; pinned on approval.
-  room.onMessage("postPreview", (msg: { from: string; text: string; boards: { id: string; label: string }[]; suggested: string }) => {
-    $<HTMLTextAreaElement>("preview-text").value = msg.text;
-    boardSel.value = msg.suggested;
-    $<HTMLDivElement>("preview").style.display = "block";
-  });
   $<HTMLButtonElement>("preview-send").onclick = () => {
     const text = $<HTMLTextAreaElement>("preview-text").value.trim();
     if (!text) return;
@@ -643,11 +683,36 @@ function wirePanel() {
 
 // ---------- boot ----------
 
+const JOIN_OPTS = () => ({
+  // We only ASK for admin; the server grants it to the instructor alone.
+  role: WANT_ROLE,
+  // Local multi-user testing only — ignored behind IAP.
+  ...(DEV_AS ? { devUser: DEV_AS } : {}),
+});
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+let booted = false; // the Phaser game is created once, never on reconnect
+let leaving = false; // set when WE are closing the connection on purpose
+
 async function main() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const client = new Client(`${proto}://${location.host}`);
-  room = await client.joinOrCreate("main", ROLE === "admin" ? { role: "admin" } : { name: "Jade" });
+  room = await client.joinOrCreate("main", JOIN_OPTS());
+  wireRoom(client);
 
+  // Small debug hook (useful for scripted testing; harmless to keep).
+  (window as any).vs = {
+    step: (dx: number, dy: number) => room.send("step", { dx, dy }),
+    goto: (x: number, y: number) => room.send("goto", { x, y }),
+    chat: (text: string) => room.send("chat", { text }),
+    world: () => latestWorld,
+  };
+}
+
+// Every handler lives here because a reconnect hands us a NEW Room object
+// and they all have to be attached again.
+function wireRoom(client: Client) {
   room.onMessage("world", (msg: { entities: Entity[] }) => {
     latestWorld = msg.entities;
     scene?.updateEntities(latestWorld);
@@ -679,13 +744,20 @@ async function main() {
 
   room.onMessage("adminAck", (msg: { ok: boolean; note: string }) => setAdminStatus(msg.note, msg.ok));
 
+  room.onMessage("postPreview", showPreview);
+
   room.onMessage("init", (msg: InitMsg) => {
     init = msg;
+    role = msg.role;
+    // A reconnect that had to fall back to a fresh join sends init again;
+    // the panel and the game are already up, only `init` needed refreshing.
+    if (booted) return;
+    booted = true;
     wirePanel();
     addMsg({
       who: "system",
       text:
-        ROLE === "admin"
+        role === "admin"
           ? "Connected as admin. You're driving Terra — walk her somewhere and talk to her below."
           : "Connected. You're in your office — walk out through the door to the halls.",
       cls: "sys",
@@ -700,13 +772,38 @@ async function main() {
     });
   });
 
-  // Small debug hook (useful for scripted testing; harmless to keep).
-  (window as any).vs = {
-    step: (dx: number, dy: number) => room.send("step", { dx, dy }),
-    goto: (x: number, y: number) => room.send("goto", { x, y }),
-    chat: (text: string) => room.send("chat", { text }),
-    world: () => latestWorld,
-  };
+  // Cloud Run terminates ANY connection at 60 minutes — a long class WILL
+  // be cut off — and laptops sleep. The server holds the seat open briefly
+  // (allowReconnection), so resume it if we can and take a fresh one if not.
+  const token = room.reconnectionToken;
+  room.onLeave((code) => {
+    if (leaving || code === 1000) return; // we closed it on purpose
+    addMsg({ who: "system", text: "Connection lost — reconnecting…", cls: "sys" });
+    void reconnect(client, token);
+  });
+}
+
+async function reconnect(client: Client, token: string) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await sleep(Math.min(1000 * 2 ** attempt, 15_000));
+    try {
+      // Resuming keeps the avatar exactly where it was standing. If the
+      // seat is gone (server restarted, window expired), take a new one.
+      let next: Room;
+      try {
+        next = await client.reconnect(token);
+      } catch {
+        next = await client.joinOrCreate("main", JOIN_OPTS());
+      }
+      room = next;
+      wireRoom(client);
+      addMsg({ who: "system", text: "Reconnected.", cls: "sys" });
+      return;
+    } catch {
+      // still down — back off and try again
+    }
+  }
+  addMsg({ who: "system", text: "Couldn't reconnect. Reload the page to rejoin.", cls: "sys" });
 }
 
 main().catch((err) => {

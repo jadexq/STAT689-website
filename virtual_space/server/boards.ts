@@ -6,6 +6,7 @@
 
 import fs from "fs";
 import path from "path";
+import { DATA_DIR } from "./paths";
 
 export interface BoardItem {
   id: string;
@@ -14,7 +15,7 @@ export interface BoardItem {
   ts: string;
 }
 
-const FILE = path.join(__dirname, "..", "data", "boards.json");
+const FILE = path.join(DATA_DIR, "boards.json");
 const MAX_ITEMS = 50;
 
 const boards = new Map<string, BoardItem[]>();

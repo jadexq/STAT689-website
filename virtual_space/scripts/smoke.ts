@@ -39,7 +39,7 @@ function assert(v: unknown, label: string) {
 async function main() {
   console.log(`Connecting to ${URL} …`);
   const client = new Client(URL);
-  const student: Room = await client.joinOrCreate("main", { name: "Jade" });
+  const student: Room = await client.joinOrCreate("main", { devUser: "jade@local" });
 
   let init: any = null;
   let world: { entities: Entity[] } = { entities: [] };
@@ -89,7 +89,7 @@ async function main() {
   student.send("admin", { action: "send", agent: "ta", dest: "commons" });
   await wait(600);
   assert(!at(terra(), spawnOf("commons")), "student's admin command was rejected");
-  const admin: Room = await client.joinOrCreate("main", { role: "admin" });
+  const admin: Room = await client.joinOrCreate("main", { devUser: "jade@local", role: "admin" });
   admin.onMessage("init", () => {});
   admin.onMessage("world", () => {});
   admin.onMessage("board", () => {});
@@ -102,7 +102,7 @@ async function main() {
   });
   admin.onMessage("adminAck", (m) => console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`));
   await wait(500);
-  assert(world.entities.length === 12, "admin joined without adding an avatar");
+  assert(world.entities.length === 7, "admin joined without adding an avatar");
   admin.send("admin", { action: "send", agent: "ta", dest: "commons" });
   await waitUntil(() => at(terra(), spawnOf("commons")), 30000, "admin sent Terra to the Common Area");
 

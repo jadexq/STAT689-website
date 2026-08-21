@@ -1,9 +1,15 @@
-// In-memory session store — one Session per browser tab. Holds the sticky
-// mode, recent chat history, the selected reading, and the rolling in-class
-// transcript. Restarting the server clears sessions; the JSONL logs in
-// data/ are the durable record.
+// In-memory session store — one Session per student identity. Holds the
+// sticky mode, recent chat history, the selected reading, and the rolling
+// in-class transcript.
+//
+// RAM does not survive a restart, and on Cloud Run with min-instances=0
+// every quiet spell is a restart. So the map is a cache, not the record:
+// on a miss, ensureSession() rebuilds the session from the JSONL turn log,
+// which IS the record. A student who comes back after class should not
+// have to reintroduce themselves.
 
 import type { ChatMessage } from "./llm.ts";
+import { readTurns } from "./logger.ts";
 
 export type SkillName = "coach" | "classroom" | "author" | "review" | "announce";
 
@@ -22,6 +28,48 @@ const sessions = new Map<string, Session>();
 const HISTORY_LIMIT = 24; // turns kept in the prompt window
 const TRANSCRIPT_LIMIT = 12_000; // chars of rolling class transcript
 
+/**
+ * The session for `id`, rebuilt from disk if it is not in memory.
+ *
+ * Prefer this over getSession() anywhere a real conversation is happening.
+ * Concurrent first-touches share one load: two messages arriving together
+ * after a cold start must not each replay the log into the same session.
+ */
+export function ensureSession(id: string): Promise<Session> {
+  const live = sessions.get(id);
+  if (live) return Promise.resolve(live);
+  let inflight = hydrating.get(id);
+  if (!inflight) {
+    inflight = hydrate(id).finally(() => hydrating.delete(id));
+    hydrating.set(id, inflight);
+  }
+  return inflight;
+}
+
+const hydrating = new Map<string, Promise<Session>>();
+
+async function hydrate(id: string): Promise<Session> {
+  const s = getSession(id);
+  const turns = await readTurns(id, HISTORY_LIMIT);
+  if (!turns.length) return s;
+  for (const t of turns) s.history.push({ role: t.role, content: t.content });
+  // Restore the sticky mode and reading from the most recent turn that had
+  // them. "clarify" is not a skill — it is the router giving up — so it
+  // must not become a mode, exactly as when running live.
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (!s.mode && turns[i].role === "assistant") {
+      const skill = turns[i].skill;
+      if (skill && skill !== "clarify") s.mode = skill as SkillName;
+    }
+    if (!s.readingId && turns[i].readingId) s.readingId = turns[i].readingId!;
+    if (s.mode && s.readingId) break;
+  }
+  console.log(`[virtual-ta] restored ${turns.length} turns for ${id}${s.mode ? ` (mode: ${s.mode})` : ""}`);
+  return s;
+}
+
+// Synchronous, memory-only. Callers that might be meeting a student for
+// the first time after a restart want ensureSession() instead.
 export function getSession(id: string): Session {
   let s = sessions.get(id);
   if (!s) {

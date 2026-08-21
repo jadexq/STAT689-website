@@ -4,8 +4,8 @@
 
 import fs from "fs";
 import path from "path";
+import { DATA_DIR as dir } from "./paths";
 
-const dir = path.join(__dirname, "..", "data");
 fs.mkdirSync(dir, { recursive: true });
 
 const stamp = new Date()

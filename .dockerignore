@@ -1,0 +1,16 @@
+# Never ship: secrets, local state, third-party material, working docs.
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/data
+**/output
+user_requirements
+improvements
+ref
+.git
+.gitignore
+**/*.log
+.DS_Store
+Dockerfile
+.dockerignore

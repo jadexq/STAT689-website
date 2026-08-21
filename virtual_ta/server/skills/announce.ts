@@ -7,6 +7,7 @@
 
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { OUTPUT_DIR } from "../paths.ts";
 import { extractText } from "unpdf";
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
@@ -15,7 +16,7 @@ import { appendAnnouncement } from "../logger.ts";
 import type { Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
 
-const OUTPUT_DIR = path.join(import.meta.dirname, "..", "..", "output");
+// output/ location comes from paths.ts (a GCS mount in the cloud)
 const URL_RE = /https?:\/\/[^\s)>"']+/;
 const MAX_SOURCE_CHARS = 20_000;
 

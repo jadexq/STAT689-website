@@ -4,7 +4,8 @@
 //   virtual_space: npm run dev   (port 2567)
 //
 // Exercises: admin role (drive Terra, private chat, speak-as-Terra),
-// room-forced skills (classroom / prep / library / computer lab),
+// room-forced skills (prep / library / computer lab; the Classroom is
+// closed while its skill is on hold),
 // compose→preview→post to boards, mic → class transcript, and the
 // virtual-student reply cap. Makes ~6 real LLM calls.
 
@@ -48,7 +49,7 @@ async function main() {
 
   // Register each connection's handlers immediately after its join —
   // messages sent during the next await would otherwise be dropped.
-  const student: Room = await client.joinOrCreate("main", { name: "Jade" });
+  const student: Room = await client.joinOrCreate("main", { devUser: "jade@local" });
   student.onMessage("init", (m) => (init = m));
   student.onMessage("world", (m) => (world = m));
   student.onMessage("chat", (m) => {
@@ -59,7 +60,7 @@ async function main() {
   student.onMessage("typing", () => {});
   student.onMessage("adminAck", () => {});
 
-  const admin: Room = await client.joinOrCreate("main", { role: "admin" });
+  const admin: Room = await client.joinOrCreate("main", { devUser: "jade@local", role: "admin" });
   admin.onMessage("init", () => {});
   admin.onMessage("world", () => {});
   admin.onMessage("board", () => {});
@@ -79,9 +80,9 @@ async function main() {
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
-  console.log("\n1. World: 12 inhabitants, mode rooms, boards");
-  await waitUntil(() => !!init && world.entities.length === 12, 6000, "12 inhabitants (no avatar for the admin)");
-  for (const [rid, skill] of [["classroom", "classroom"], ["prep-room", "author"], ["library", "announce"], ["computer-lab", "review"]]) {
+  console.log("\n1. World: 7 inhabitants, mode rooms, boards");
+  await waitUntil(() => !!init && world.entities.length === 7, 6000, "7 inhabitants (no avatar for the admin)");
+  for (const [rid, skill] of [["prep-room", "author"], ["library", "announce"], ["computer-lab", "review"]]) {
     assert(init.rooms.some((r: any) => r.id === rid && r.forcedSkill === skill), `${rid} forces ${skill}`);
   }
   assert(init.rooms.filter((r: any) => r.hasBoard).length === 2, "Library and Computer Lab have boards");
@@ -112,19 +113,18 @@ async function main() {
     "student entered the Library and received the board"
   );
 
-  console.log("\n5. Mic → class transcript → classroom-mode Q&A");
-  admin.send("mic", { text: "Today's lecture is about the transformer architecture." });
-  admin.send("mic", { text: "The key idea is self-attention, which relates every token to every other token without recurrence." });
-  await wait(1500);
-  admin.send("admin", { action: "send", agent: "ta", dest: "classroom" });
-  student.send("goto", spawnOf("classroom"));
-  await waitUntil(() => at(me(), spawnOf("classroom")) && at(terra(), spawnOf("classroom")), 40000, "Jade & Terra in the Classroom");
+  console.log("\n5. Classroom is closed while its skill is on hold");
+  // Replaces the old mic → class transcript → classroom-mode Q&A test.
+  // Restore that section (see git history) when CLASSROOM_OPEN and
+  // CLASSROOM_ENABLED both go back to true.
+  const classroom = init.rooms.find((r: any) => r.id === "classroom");
+  assert(classroom?.closed === true, "Classroom is marked closed");
+  assert(!classroom?.forcedSkill, "Classroom forces no skill");
+  assert(!init.doors.some((d: any) => d.x === 4 && d.y === 13), "Classroom door is sealed");
   let mark = sChats.length;
-  student.send("chat", { text: "What did the lecture just cover?" });
-  await waitUntil(() => sChats.slice(mark).some((c) => c.from === "Terra"), 120000, "Terra answered in the classroom");
-  const classReply = sChats.slice(mark).find((c) => c.from === "Terra");
-  assert(classReply.skill === "classroom", `room forced the classroom skill (got "${classReply.skill}")`);
-  assert(/transformer|attention/i.test(classReply.text), "answer grounded in the lecture transcript");
+  student.send("goto", spawnOf("classroom"));
+  await wait(2500);
+  assert(!at(me(), spawnOf("classroom")), "student cannot walk into the Classroom");
 
   console.log("\n6. Computer Lab forces the review skill");
   admin.send("admin", { action: "send", agent: "ta", dest: "computer-lab" });
