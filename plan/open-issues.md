@@ -60,9 +60,20 @@ Things currently believed but not demonstrated. Each names what would actually s
   a live IAP-fronted service.** Order matters: deploy with IAP enabled and `TRUST_IAP_HEADER`
   still **off**, make one request, decode the `x-goog-iap-jwt-assertion` it carries, read its
   `aud`, set `IAP_JWT_AUDIENCE` to exactly that, *then* turn verification on.
-- **Recommended alongside it:** make the mismatch self-diagnosing. The error currently says the
-  audience is wrong without saying what was expected or received. One log line on first failure
-  turns this from a debugging session into a five-second fix. Not yet done.
+- **Self-diagnosing as of `f8a9098`.** A mismatch now logs the expected value, the received
+  value and the variable to change, once per process, so step 2 above can be read straight out
+  of the server log instead of decoding a token by hand:
+
+  ```
+  [identity] IAP_JWT_AUDIENCE does not match the assertion.
+               expected: /projects/343454961473/locations/us-central1/services/stat689
+               received: /projects/1/locations/us-central1/services/other
+               Set IAP_JWT_AUDIENCE to the received value — it is the Cloud Run
+               resource path, not the OAuth client ID.
+  ```
+
+  This lowers the cost of getting it wrong; it does not make it verified. The item stays open
+  until a real Google token has been checked.
 
 ### B2. Natural IAP session expiry has only been simulated
 - [ ] **Open — low risk, no cheap test**

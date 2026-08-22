@@ -1132,7 +1132,9 @@ clean checkout of `09f5e81`, so neither is a regression from these commits, and 
 fixed here: fixing tests inside an auth change is how you lose track of what broke what.
 
 **This verification also did not touch real IAP.** The tests mint tokens with a local key, which
-proves the logic but not that Google's tokens satisfy it.
+proves the logic but not that Google's tokens satisfy it. `f8a9098` makes the likeliest symptom
+self-explaining — an audience mismatch logs the expected and received strings once, so the
+correct value can be copied out of the log rather than decoded by hand.
 
 > **Status for all of the above lives in [`open-issues.md`](./open-issues.md), not here.** That
 > file is the tracker; this section is the account of what was built and why. Items A1, A2 and
