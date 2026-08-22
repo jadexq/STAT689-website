@@ -520,10 +520,13 @@ the same reason. Two consequences:
 Tradeoff: a hard crash loses up to one flush interval. `SIGTERM` covers graceful shutdowns; a
 2-minute interval during class costs ~1,700 ops/month and is still well inside budget.
 
-### 14g. Three fixes — identified, NOT yet applied
+### 14g. Three fixes — identified 2026-08-20, ALL APPLIED 2026-08-21
 
-Deferred by explicit instruction on 2026-08-20. All three are local work, testable without GCP,
-and therefore not blocked by the spend cap.
+Deferred by explicit instruction on 2026-08-20, then built in Phase B. All three are local work,
+testable without GCP, and therefore were never blocked by the spend cap. **Measured results and
+verification are in §14k** — A gave 1,029 → 31 bytes, B gave 6.84 MB → 0.34 MB (19.9× over the
+wire), C was browser-tested with a clean server-side `leave` and no held seat. The table below
+is the original estimate, kept for comparison.
 
 | Fix | Effort | Effect |
 |---|---|---|
