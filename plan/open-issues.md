@@ -163,11 +163,20 @@ Recorded so they are not rediscovered as if they were new problems.
 - Superseded sections are patched with markers rather than rewritten. Consolidation was put off
   until Phase B closed so it would not be done twice. Phase B is now closed.
 
-### D5. Student Google addresses not yet supplied
-- [ ] **Blocked on the instructor**
-- Needed for the IAP allowlist and `ROSTER`. Five students plus the instructor = six accounts.
-- **Keep them out of this repo.** Both files here are tracked; put the addresses in a local file
-  or pass them straight to `gcloud`. Git history outlives an edit.
+### D5. Student Google addresses — one supplied for testing, four still outstanding
+- [ ] **Partially unblocked 2026-08-22**
+- Full class is five students plus the instructor = six accounts. Only the accessor grant and
+  the optional `ROSTER` display name need an address; **the email alone is sufficient.**
+- **Test account: `jadewang@tamu.edu`** — the instructor's second Google account, confirmed a
+  real Google identity (it appears in the Google account chooser). Useful beyond convenience:
+  `ADMIN_EMAILS` will hold `jadexqwang@gmail.com`, so the tamu.edu account arrives as an
+  ordinary student and exercises both roles for real.
+- **Granting one changes nothing else.** IAP grants are per-account and additive, and the five
+  student offices `office-s1`…`office-s5` are static geometry in `map.ts`. `ROSTER` only maps
+  email to display name in `identity.ts` — nothing derives rooms from it, so the other four
+  offices simply stand empty.
+- **Keep real student addresses out of this repo** when the other four arrive. Both files here
+  are tracked; use a local file or pass them straight to `gcloud`. Git history outlives an edit.
 
 ---
 
