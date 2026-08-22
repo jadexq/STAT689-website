@@ -868,9 +868,11 @@ function wireRoom(client: Client) {
     });
   });
 
-  // Cloud Run terminates ANY connection at 60 minutes — a long class WILL
-  // be cut off — and laptops sleep. The server holds the seat open briefly
-  // (allowReconnection), so resume it if we can and take a fresh one if not.
+  // Cloud Run cuts every connection at the service's request timeout — a
+  // wall-clock limit, not an idle one, so heartbeats do not extend it and a
+  // long class WILL be interrupted. Laptops sleep too. The server holds the
+  // seat open briefly (allowReconnection), so resume it if we can and take a
+  // fresh one if not.
   const token = room.reconnectionToken;
   room.onLeave((code) => {
     if (leaving || code === 1000) return; // we closed it on purpose
@@ -899,7 +901,37 @@ async function reconnect(client: Client, token: string) {
       // still down — back off and try again
     }
   }
+  // Out of retries. The likeliest cause is not a dead server but an expired
+  // IAP session: a browser cannot follow a 302 on a WebSocket upgrade, so
+  // IAP's redirect to the login page is invisible here and every attempt just
+  // fails. Only a full page load runs the sign-in round trip, and the socket
+  // closes with 1006 either way — indistinguishable from a real network drop.
+  // So reload rather than printing advice a student has to read and act on.
+  //
+  // Guarded, because if the server is genuinely down this would otherwise
+  // become a reload every ~75 seconds forever.
+  if (canAutoReload()) {
+    addMsg({ who: "system", text: "Session expired — reloading to sign in again…", cls: "sys" });
+    setTimeout(() => location.reload(), 1200); // let the message render
+    return;
+  }
   addMsg({ who: "system", text: "Couldn't reconnect. Reload the page to rejoin.", cls: "sys" });
+}
+
+// At most one automatic reload per RELOAD_COOLDOWN_MS, remembered for the tab
+// rather than the page, since the reload itself wipes everything else.
+const RELOAD_KEY = "vs.lastAutoReload";
+const RELOAD_COOLDOWN_MS = 5 * 60 * 1000;
+
+function canAutoReload(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+    if (Date.now() - last < RELOAD_COOLDOWN_MS) return false;
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return false; // private mode, storage disabled — never loop
+  }
 }
 
 main().catch((err) => {
