@@ -93,6 +93,23 @@ Things currently believed but not demonstrated. Each names what would actually s
 - **Resolved when:** an expired session in Phase C produces exactly one reload, and a
   deliberately stopped server produces one reload and then the fallback message — not a loop.
 
+### B4. The OAuth client's redirect URI has not been independently confirmed
+- [ ] **Open — self-announcing, so low cost to leave**
+- The instructor added the IAP redirect URI in the Console on 2026-08-22. It cannot be verified
+  from here: the downloaded client JSON is a creation-time snapshot that never updates, and the
+  OAuth client admin API was shut down 2026-03-19 (plan §14l).
+- **A dead end worth not repeating:** probing
+  `accounts.google.com/o/oauth2/v2/auth` unauthenticated proves nothing. Google defers
+  `redirect_uri` validation until after sign-in, so a deliberately bogus URI and the real one
+  both return an identical `302`. A negative control is what exposed this; the first probe
+  looked like confirmation and was not.
+- **Expected value:**
+  `https://iap.googleapis.com/v1/oauth/clientIds/343454961473-93ljojsu6q8r5u1ro6lviums1f5j0n74.apps.googleusercontent.com:handleRedirect`
+  Typical mistakes: truncated client id, missing `:handleRedirect`, trailing slash, `http`.
+- **Resolved when:** a real sign-in completes. If it is wrong the symptom is
+  `Error 400: redirect_uri_mismatch`, which names the URI Google received — unlike the spike's
+  502, this failure explains itself, which is why it is fine to leave until then.
+
 ---
 
 ## C. Accepted limitations — not bugs, do not re-litigate
