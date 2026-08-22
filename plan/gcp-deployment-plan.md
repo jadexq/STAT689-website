@@ -816,9 +816,9 @@ needs an authenticated browser session, which needs the OAuth client above.
 
 **Spend.** The CLI has no "current spend" endpoint — real cost needs the console's Billing →
 Reports page, or a BigQuery export. What can be stated exactly is the resource inventory left
-behind: **zero** Cloud Run services, **zero** jobs, **two** `iap-spike` images in Artifact
-Registry (**150.76 MB** — under the 0.5 GB free allowance, but not nothing; see §14l.7), and
-**984 bytes** in `gs://stat689-data`. Three Cloud Build builds of roughly
+behind: **zero** Cloud Run services, **zero** jobs, **zero** images in Artifact Registry (the
+two `iap-spike` images were deleted 2026-08-22; see §14l.7), and **984 bytes** in
+`gs://stat689-data`. Three Cloud Build builds of roughly
 two minutes each, against 2,500 free minutes a month; job executions were seconds of vCPU.
 
 **Documentation debt, deliberately deferred.** §8 and §9 are patched by "superseded by" markers
@@ -1053,10 +1053,14 @@ before the results are in would mean doing it twice.
    Rebuilding the spike, if a live IAP test rig is wanted during Phase C, is ~10 minutes using
    steps 1–3 above. The dead ends are documented so none of them need rediscovering.
 
-   **One thing the teardown did not catch:** `gcloud run services delete` leaves the container
-   images behind. Two `iap-spike` images (150.76 MB) remain in the `cloud-run-source-deploy`
-   Artifact Registry repo. Still inside the 0.5 GB free allowance, so not billing — but the
-   allowance is small and Phase C will push real images into the same repo. Clean up with:
+   **One thing the teardown did not catch at first:** `gcloud run services delete` leaves the
+   container images behind. Two `iap-spike` images (150.76 MB) were still in the
+   `cloud-run-source-deploy` Artifact Registry repo after the service was gone. **Deleted
+   2026-08-22** — the repo now lists zero packages and zero manifests.
+
+   Note the repo's reported size does not drop immediately: it read 158 MB *after* the delete
+   completed, because Artifact Registry recomputes that figure periodically rather than on
+   write. Trust `images list` / `packages list`, not `repositories describe`. Cleanup commands:
 
    ```
    gcloud artifacts docker images list \
@@ -1066,7 +1070,9 @@ before the results are in would mean doing it twice.
    ```
 
    Worth a standing habit for Phase C: every `--source` deploy pushes a new image and none of
-   them are ever removed automatically.
+   them are ever removed automatically. The free allowance is only 0.5 GB and a single Node
+   image is ~75 MB, so roughly seven deploys fill it. Prune as you go, or set a cleanup policy
+   on the repo.
 
 
 ### 14m. Hardening owed before students are on it — the runtime service account
