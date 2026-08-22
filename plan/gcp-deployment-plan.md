@@ -259,6 +259,21 @@ storage. This replaces it. Run top to bottom.
 - [x] `main` fast-forwarded to a known-good state
 - [ ] Instructor go-ahead on spend
 
+### Stage 1a — clear the spike's leftover snapshot
+
+`gs://stat689-data/state/current.tar.gz` and `state/daily/2026-08-21.tar.gz` are left over from
+the Phase B container round-trip. **`sync.mjs restore` runs before the servers start, so the
+first production boot would restore that test state** — the spike's conversation and board post
+would be sitting in the class space on day one.
+
+```
+gcloud storage rm -r gs://stat689-data/state --project=stat689
+```
+
+Restoring-from-empty is the normal first-boot path and `sync.mjs` handles it by design (a
+missing snapshot exits 0 rather than boot-looping). Restore still gets proven properly at
+Stage 4 step 6.
+
 ### Stage 1 — the runtime service account (§14m), BEFORE the first deploy
 
 Doing this first avoids deploying twice. This is the *runtime* identity; Cloud Build keeps
@@ -295,7 +310,7 @@ gcloud run deploy stat689 \
   --timeout=3600 --memory=1Gi \
   --no-allow-unauthenticated --iap \
   --set-secrets=OLLAMA_API_KEY=ollama-key:latest \
-  --set-env-vars=^@^TRUST_IAP_HEADER=1@IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689@ADMIN_EMAILS=jadexqwang@gmail.com@SNAPSHOT_URI=gs://stat689-data/state@LLM_PROVIDER=ollama@OLLAMA_BASE_URL=https://ollama.com/v1@OLLAMA_MODEL=gpt-oss:120b
+  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
 ```
 
 Why each flag that is not obvious:
@@ -307,8 +322,16 @@ Why each flag that is not obvious:
 - **No `--add-volume`.** The FUSE mount is gone (§14f). `SNAPSHOT_URI` drives `docker/sync.mjs`
   instead: restore before boot, periodic flush after.
 - **No `--session-affinity`.** Redundant at one instance; add it only if that ever changes.
-- **`^@^` delimiter** because the env values contain commas and slashes.
+- **`^~^` delimiter, not `^@^`.** gcloud's alternate delimiter must appear in *no* value
+  (`gcloud topic escaping`). `@` is disqualified by `ADMIN_EMAILS=jadexqwang@gmail.com` — it
+  would split the email mid-value. `~` appears in none of these values. Quoted, so the shell
+  leaves it alone.
 - **`DATA_DIR`, `PORT`, `TA_BASE_URL` are already baked into the Dockerfile** — do not pass them.
+- **`--no-allow-unauthenticated` is the one flag combination the spike did NOT verify.** It is
+  what Google's design intends — `--iap` grants the IAP service agent `run.invoker`, and this
+  stops anything else invoking the service — but `iap-spike` ran without it. If sign-in
+  succeeds and then every request 403s, this is the flag: redeploy without it, confirm, and
+  record the result against open issue B5.
 
 **If the audience is wrong, the log says so.** `f8a9098` prints the expected and received values
 once. Read it, redeploy with the corrected string. That diagnostic exists so this does not need

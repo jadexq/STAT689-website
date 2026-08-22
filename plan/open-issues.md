@@ -110,6 +110,17 @@ Things currently believed but not demonstrated. Each names what would actually s
   `Error 400: redirect_uri_mismatch`, which names the URI Google received — unlike the spike's
   502, this failure explains itself, which is why it is fine to leave until then.
 
+### B5. `--no-allow-unauthenticated` alongside `--iap` is unverified
+- [ ] **Open — resolves itself at Stage 2 of the runbook**
+- The Phase B spike deployed `iap-spike` *without* `--no-allow-unauthenticated` and IAP still
+  intercepted, so that combination is proven. The runbook uses the stricter one, which is what
+  Google's design intends: `--iap` grants the IAP service agent `run.invoker`, and denying
+  unauthenticated invocation stops anything else reaching the container directly.
+- **Symptom if wrong:** sign-in succeeds, then every request 403s.
+- **Fallback:** redeploy without the flag. Losing it is a defence-in-depth loss, not a hole —
+  IAP still fronts the service either way.
+- **Resolved when:** a signed-in request reaches the app with the flag set.
+
 ---
 
 ## C. Accepted limitations — not bugs, do not re-litigate
