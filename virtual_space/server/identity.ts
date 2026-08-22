@@ -96,6 +96,7 @@ let keyCache = new Map<string, KeyObject>();
 let keysFetchedAt = 0; // last SUCCESSFUL fetch — drives the TTL
 let lastAttemptAt = 0; // last attempt, success or not — drives the throttle
 let inFlight: Promise<void> | null = null;
+let warnedAudience = false; // the audience diagnostic is logged once, not per student
 
 function b64urlToBuf(s: string): Buffer {
   return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -178,7 +179,26 @@ export async function verifyIapJwt(token: string): Promise<IapClaims> {
 
   const claims = JSON.parse(b64urlToBuf(rawPayload).toString("utf8"));
   if (claims.iss !== IAP_ISSUER) throw new Error(`unexpected assertion issuer ${claims.iss}`);
-  if (claims.aud !== AUDIENCE) throw new Error("assertion is for a different service");
+
+  if (claims.aud !== AUDIENCE) {
+    // By far the likeliest misconfiguration, and the least self-evident: the
+    // symptom is every student being refused, which looks like IAP is broken
+    // rather than like one env var holding the wrong string. Say what was
+    // expected and what arrived, so the fix is a copy-paste. Once per process
+    // — a whole class failing to log in should not also flood the log.
+    if (!warnedAudience) {
+      warnedAudience = true;
+      console.error(
+        "[identity] IAP_JWT_AUDIENCE does not match the assertion.\n" +
+          `             expected: ${AUDIENCE || "(unset)"}\n` +
+          `             received: ${claims.aud}\n` +
+          "             Set IAP_JWT_AUDIENCE to the received value — it is the Cloud Run\n" +
+          "             resource path, not the OAuth client ID."
+      );
+    }
+    // Deliberately vague to the caller; the detail is in the server log.
+    throw new Error("assertion is for a different service");
+  }
 
   const now = Math.floor(Date.now() / 1000);
   if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S < now) {

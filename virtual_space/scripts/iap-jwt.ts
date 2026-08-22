@@ -182,9 +182,47 @@ async function main() {
   );
 
   // --- malformed and hostile tokens ---------------------------------------
-  await rejects("a token for another service is refused", () =>
-    verifyIapJwt(mint({ key: signing, aud: "/projects/1/locations/us-central1/services/other" }))
-  );
+  // A wrong audience refuses every student at once and the symptom looks like
+  // broken IAP rather than a wrong env var, so the log has to name the string
+  // to fix. This must capture the FIRST mismatch of the process — the
+  // diagnostic is once-only, and after this it stays quiet forever.
+  const WRONG_AUD = "/projects/1/locations/us-central1/services/other";
+  {
+    const realError = console.error;
+    const first: string[] = [];
+    const later: string[] = [];
+    let sink = first;
+    console.error = (...a: unknown[]) => void sink.push(a.join(" "));
+    let threw = false;
+    try {
+      await verifyIapJwt(mint({ key: signing, aud: WRONG_AUD })).catch(() => {
+        threw = true;
+      });
+      sink = later;
+      await verifyIapJwt(mint({ key: signing, aud: WRONG_AUD })).catch(() => {});
+      await verifyIapJwt(mint({ key: signing, aud: WRONG_AUD })).catch(() => {});
+    } finally {
+      console.error = realError;
+    }
+
+    threw ? ok("a token for another service is refused") : bad("a token for another service is refused", "no throw");
+
+    const text = first.join("\n");
+    const names = text.includes(AUDIENCE) && text.includes(WRONG_AUD);
+    const guides = /IAP_JWT_AUDIENCE/.test(text);
+    if (names && guides) {
+      ok("the audience mismatch log names both the expected and received values");
+    } else {
+      bad(
+        "the audience mismatch log names both the expected and received values",
+        `expected-present=${text.includes(AUDIENCE)} received-present=${text.includes(WRONG_AUD)} mentions-var=${guides}`
+      );
+    }
+
+    later.length === 0
+      ? ok("...and is logged once, not once per refused student")
+      : bad("...and is logged once, not once per refused student", `logged ${later.length} more times`);
+  }
   await rejects("a wrong issuer is refused", () =>
     verifyIapJwt(mint({ key: signing, iss: "https://evil.example" }))
   );
