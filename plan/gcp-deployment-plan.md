@@ -17,6 +17,11 @@ can log in with their Google accounts.
 >   placeholders here. The sample records in this doc (`ana@tamu.edu`, "Ana Ruiz", `a@b.com`)
 >   are invented and should stay that way.
 
+> **Open problems live in [`open-issues.md`](./open-issues.md)**, not in this file. This one
+> explains why decisions were made and reads as a narrative; that one tracks what is still
+> outstanding and is meant to be ticked off. Status written into a narrative goes stale — two
+> sections here had to be corrected on 2026-08-22 for exactly that reason.
+
 ---
 
 ## 1. Goal & constraints
@@ -1121,22 +1126,17 @@ bare email header, a mismatched header, a foreign audience, a bad issuer, expire
 not-yet-valid tokens, `alg=none`, a tampered payload, an unpublished key and garbage are each
 refused.
 
-**Two pre-existing test failures, confirmed not caused by these changes** — each reproduced on a
-clean checkout of `09f5e81`:
+**Two pre-existing test failures surfaced while verifying this work** — `ghost-test.ts` asserts a
+stale entity count, and `multiuser.ts` only passes when run first. Both were reproduced on a
+clean checkout of `09f5e81`, so neither is a regression from these commits, and neither was
+fixed here: fixing tests inside an auth change is how you lose track of what broke what.
 
-- **`ghost-test.ts` is stale.** It asserts `entities === 12`, a number last touched in `fd767cb`
-  and never updated when `60c4e5f` cut the virtual cast. Fails at baseline (`got 7`) and after
-  (`got 10`); the count drifts because entities accumulate in a long-running server.
-- **`multiuser.ts` is order-dependent.** Passes against a fresh room, times out on "Terra
-  answered Ana (and is free again)" when run third, after `smoke` and `integration` have already
-  queued LLM work. Identical at baseline. It is a test-isolation problem, not a product bug.
+**This verification also did not touch real IAP.** The tests mint tokens with a local key, which
+proves the logic but not that Google's tokens satisfy it.
 
-Neither is fixed here — worth doing, but not inside an auth change.
-
-**Still not verified against real IAP.** The spike is torn down, so the tests prove the
-verification logic against a local key, not that Google's tokens satisfy it. The claim shapes
-were taken from the real assertion captured in §14l.4. First contact with live IAP is Phase C,
-and `IAP_JWT_AUDIENCE` being wrong is the most likely thing to go wrong there.
+> **Status for all of the above lives in [`open-issues.md`](./open-issues.md), not here.** That
+> file is the tracker; this section is the account of what was built and why. Items A1, A2 and
+> B1 cover the three points just made, including when and how to settle the audience question.
 
 
 ### 14m. Hardening owed before students are on it — the runtime service account
