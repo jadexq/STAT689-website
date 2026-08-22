@@ -127,13 +127,30 @@ Recorded so they are not rediscovered as if they were new problems.
   existing object needs delete permission, so `objectCreator` lets the *first* snapshot succeed
   and every later one fail. Verification is **two** `[sync] flushed (changed)` lines, not one.
 
-### D2. Artifact Registry has no cleanup policy
-- [ ] **Open**
-- The free allowance is 0.5 GB and a single Node image is ~75 MB, so roughly seven `--source`
-  deploys fill it. Nothing prunes automatically, and `gcloud run services delete` does not remove
-  images — that gap already caught us once (plan §14l.7).
+### D2. Artifact Registry has no cleanup policy — the tightest allowance we have
+- [ ] **Open — will bite during Phase C, not after**
+- The free allowance is **0.5 GB** and the real app image is **107 MB compressed** (measured,
+  plan §14d), so **roughly four `--source` deploys fill it**. Phase C means iterating, so this
+  is the first free-tier line we will actually hit.
+  *(An earlier version of this entry said ~75 MB and seven deploys. That was the throwaway
+  `iap-spike` probe image, not the app.)*
+- Nothing prunes automatically, and `gcloud run services delete` does not remove images — that
+  gap already caught us once (plan §14l.7).
 - The repo's reported size lags deletions; trust `images list`, not `repositories describe`.
 - **Resolved when:** a cleanup policy exists on the repo, or pruning is part of the deploy habit.
+
+### D2b. The Ollama bill has no limit and is outside the GCP cap
+- [ ] **Open — accepted for now, revisit before the class scales up**
+- `OLLAMA_BASE_URL` defaults to `https://ollama.com/v1`, so the LLM is a hosted external service.
+  It works from Cloud Run, but **the GCP budget alert does not cover it.** The spend cap that
+  caught the runaway in §14b would not fire on a runaway here.
+- **Decision 2026-08-22: use Ollama, set no limit for now.** Recorded deliberately rather than
+  overlooked.
+- What would make this urgent: more students than the current handful, agents that call the LLM
+  in a loop, or any automated traffic. Each turn is one API call per participating agent.
+- **Revisit when:** the roster grows beyond the pilot, or before the space is left running
+  unattended. **Resolved when:** either a spend limit exists on the Ollama account, or a
+  deliberate decision is recorded that none is wanted at the final class size.
 
 ### D3. §6 of the plan is a pre-spike skeleton
 - [ ] **Open**
