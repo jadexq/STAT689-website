@@ -102,7 +102,7 @@ export class MainRoom extends Room {
   // which is the correct outcome when we are behind IAP and no verified
   // identity arrived. `request` carries the IAP header on the WebSocket
   // upgrade; `options.devUser` is honoured only outside IAP.
-  onAuth(_client: Client, options: any, request?: IncomingMessage): Identity {
+  async onAuth(_client: Client, options: any, request?: IncomingMessage): Promise<Identity> {
     return identify(request, options?.devUser);
   }
 

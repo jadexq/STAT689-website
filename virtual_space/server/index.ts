@@ -12,7 +12,7 @@ import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MainRoom } from "./rooms/MainRoom";
 import { logFilePath } from "./logger";
-import { identityMode } from "./identity";
+import { identityMode, warmIapKeys } from "./identity";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -33,5 +33,6 @@ httpServer.listen(PORT, () => {
   console.log(`Virtual Space running at http://localhost:${PORT}`);
   console.log(`Session log: ${logFilePath()}`);
   console.log(`Auth: ${identityMode()}`);
+  warmIapKeys(); // fetch IAP's signing keys now, not on the first student
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });
