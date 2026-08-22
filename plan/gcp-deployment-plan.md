@@ -231,29 +231,139 @@ Two things I will not guess at. A hello-world Cloud Run service, no app code:
 
 ---
 
-## 6. Phase C — deploy
+## 6. Phase C — deploy (runbook, rewritten 2026-08-22)
 
-1. Enable APIs: `run`, `iap`, `secretmanager`, `artifactregistry`, `cloudbuild`, `storage`.
-2. `gsutil mb -l us-central1 gs://stat689-data`
-3. Secrets → Secret Manager: `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`.
-4. `gcloud run deploy stat689 --source . --region us-central1 --min-instances=0
-   --max-instances=1 --session-affinity --timeout=3600 --memory=1Gi
-   --add-volume=name=data,type=cloud-storage,bucket=stat689-data
-   --add-volume-mount=volume=data,mount-path=/data
-   --set-secrets=OLLAMA_API_KEY=ollama-key:latest --no-allow-unauthenticated`
-5. Enable IAP on the service; grant `roles/iap.httpsResourceAccessor` to the 6 accounts.
-6. `--set-env-vars TRUST_IAP_HEADER=1,ADMIN_EMAILS=<you>,DATA_DIR=/data`
-7. Smoke test as yourself, then have one student log in before you rely on it in class.
+The original §6 was written before the Phase B spike and every one of its seven steps was
+stale — the FUSE mount it deploys was abandoned, three of its APIs and both its setup steps
+are already done, and it predates IAP's OAuth client, `IAP_JWT_AUDIENCE` and the snapshot
+storage. This replaces it. Run top to bottom.
 
-> **Steps 2 and 4 above are stale.** The `--add-volume`/`--add-volume-mount` GCS FUSE mount was
-> abandoned — see §14f (why) and §14l (the replacement, verified). Step 5 also needs an OAuth
-> client created by hand before IAP will serve anything — and the working `gcloud` sequence is
-> in §14l, which is not the one most tutorials give.
->
-> **Before the first student logs in, do §14m** — the runtime currently inherits
-> `roles/editor` on the whole project and should get a dedicated service account instead.
+**Constants used below**
 
----
+| | |
+|---|---|
+| project / number | `stat689` / `343454961473` |
+| region | `us-central1` |
+| service | `stat689` |
+| bucket | `gs://stat689-data` (exists; snapshots under `state/`) |
+| OAuth client | `343454961473-93ljojsu6q8r5u1ro6lviums1f5j0n74.apps.googleusercontent.com` |
+| admin | `jadexqwang@gmail.com` |
+| test student | `jadewang@tamu.edu` |
+
+### Stage 0 — preconditions (all already satisfied as of 2026-08-22)
+
+- [x] APIs enabled: `run`, `iap`, `secretmanager`, `artifactregistry`, `cloudbuild`, `storage`
+- [x] `gs://stat689-data` exists
+- [x] Secret `ollama-key` exists, verified byte-identical to the local key
+- [x] OAuth client created; redirect URI added by hand (unconfirmed — open issue B4)
+- [x] `main` fast-forwarded to a known-good state
+- [ ] Instructor go-ahead on spend
+
+### Stage 1 — the runtime service account (§14m), BEFORE the first deploy
+
+Doing this first avoids deploying twice. This is the *runtime* identity; Cloud Build keeps
+using the default compute account, which is why its `roles/editor` must **not** be stripped.
+
+```
+gcloud iam service-accounts create stat689-app \
+  --display-name="STAT689 app runtime" --project=stat689
+
+gcloud storage buckets add-iam-policy-binding gs://stat689-data \
+  --member="serviceAccount:stat689-app@stat689.iam.gserviceaccount.com" \
+  --role="roles/storage.objectUser"
+
+gcloud secrets add-iam-policy-binding ollama-key \
+  --member="serviceAccount:stat689-app@stat689.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" --project=stat689
+```
+
+**`objectUser`, not `objectCreator`.** Overwriting an existing object needs delete permission,
+so `objectCreator` lets the *first* snapshot succeed and every later one fail — the worst
+possible failure shape. Without the `secretAccessor` grant the container cannot read the key
+and never starts.
+
+IAM propagation lags. If the next stage fails on permissions, wait a minute and retry rather
+than re-granting.
+
+### Stage 2 — deploy
+
+```
+gcloud run deploy stat689 \
+  --source=. --region=us-central1 --project=stat689 \
+  --service-account=stat689-app@stat689.iam.gserviceaccount.com \
+  --min-instances=0 --max-instances=1 \
+  --timeout=3600 --memory=1Gi \
+  --no-allow-unauthenticated --iap \
+  --set-secrets=OLLAMA_API_KEY=ollama-key:latest \
+  --set-env-vars=^@^TRUST_IAP_HEADER=1@IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689@ADMIN_EMAILS=jadexqwang@gmail.com@SNAPSHOT_URI=gs://stat689-data/state@LLM_PROVIDER=ollama@OLLAMA_BASE_URL=https://ollama.com/v1@OLLAMA_MODEL=gpt-oss:120b
+```
+
+Why each flag that is not obvious:
+
+- **`--max-instances=1`** is correctness, not cost. Colyseus room state lives in one instance's
+  RAM; a second instance scatters reconnecting students and breaks rooms silently.
+- **`--timeout=3600`** is the maximum. B3 proved the cut is wall-clock and unavoidable, so this
+  makes it once or twice a class instead of every two minutes.
+- **No `--add-volume`.** The FUSE mount is gone (§14f). `SNAPSHOT_URI` drives `docker/sync.mjs`
+  instead: restore before boot, periodic flush after.
+- **No `--session-affinity`.** Redundant at one instance; add it only if that ever changes.
+- **`^@^` delimiter** because the env values contain commas and slashes.
+- **`DATA_DIR`, `PORT`, `TA_BASE_URL` are already baked into the Dockerfile** — do not pass them.
+
+**If the audience is wrong, the log says so.** `f8a9098` prints the expected and received values
+once. Read it, redeploy with the corrected string. That diagnostic exists so this does not need
+a two-stage deploy — but if a single failed login is unacceptable, deploy once with
+`TRUST_IAP_HEADER=0`, capture a real assertion, then re-deploy with it set.
+
+### Stage 3 — point IAP at the OAuth client, then grant access
+
+The client attaches at the **project** level, not the service. The service-level PATCH that
+looks right returns 400 (§14l).
+
+```
+# settings.yaml written outside the repo, chmod 600, deleted afterwards:
+#   access_settings:
+#     oauth_settings:
+#       client_id: "…"
+#       client_secret: "…"
+gcloud iap settings set <path>/settings.yaml --project=stat689 --resource-type=iap_web
+
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadexqwang@gmail.com --role=roles/iap.httpsResourceAccessor
+
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadewang@tamu.edu --role=roles/iap.httpsResourceAccessor
+```
+
+`gcloud run services add-iam-policy-binding --role=roles/iap.httpsResourceAccessor` **errors** —
+it must be `gcloud iap web add-iam-policy-binding`. Add the other four students the same way,
+one command each; nothing else changes when you do.
+
+### Stage 4 — verify, in this order
+
+1. **`curl -sI <url>` → 302 to `accounts.google.com`.** A **502 with
+   `x-goog-iap-generated-response: true`** means the OAuth client did not attach — redo stage 3.
+2. **Sign in as the admin.** A `redirect_uri_mismatch` here is open issue B4: the error names the
+   URI Google received, so fix it in the Console and retry.
+3. **Check the startup log** for `Auth: IAP, JWT-verified (aud: …)`. If instead it shows the
+   audience diagnostic, take the "received" value and redeploy.
+4. **Sign in as `jadewang@tamu.edu`** in a separate profile. It must arrive as a *student* — no
+   admin panel — which is the real point of using a second account.
+5. **One full TA conversation and one board post**, to prove the Ollama key resolved from Secret
+   Manager.
+6. **Snapshot round trip.** Confirm **two** `[sync] flushed (changed)` lines in the log, not one
+   — one proves nothing, since `objectCreator` would also produce exactly one.
+7. **Leave a tab open past the timeout.** Expect a 1006 close and a silent reconnect with the
+   avatar in place. That is B3 confirmed in production.
+
+### Stage 5 — afterwards
+
+- **Prune Artifact Registry.** 0.5 GB free, ~107 MB per image, so about four deploys fills it and
+  nothing prunes automatically (open issue D2).
+- **Tick off** B1, B3, B4 and D1 in `open-issues.md`.
+- Add the remaining four students when the class starts.
 
 ## 7. Testing
 

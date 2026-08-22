@@ -169,11 +169,10 @@ Recorded so they are not rediscovered as if they were new problems.
   unattended. **Resolved when:** either a spend limit exists on the Ollama account, or a
   deliberate decision is recorded that none is wanted at the final class size.
 
-### D3. §6 of the plan is a pre-spike skeleton
-- [ ] **Open**
-- Steps 2 and 4 describe the abandoned GCS FUSE mount; step 5 omits the OAuth client entirely.
-  Pointer blocks warn about this, but the step list itself still reads as if runnable.
-- **Resolved when:** §6 is rewritten against §14l/§14m/§14n, or deleted in favour of them.
+### D3. §6 of the plan was a pre-spike skeleton
+- [x] **Resolved 2026-08-22.** §6 rewritten as a five-stage runbook against §14f/§14l/§14m/§14n.
+  All seven original steps were stale: the FUSE mount was abandoned, the API and bucket setup
+  were already done, and it predated the OAuth client, `IAP_JWT_AUDIENCE` and snapshot storage.
 
 ### D4. §8, §9 and §14 are three layers of correction
 - [ ] **Open — deliberately deferred**
