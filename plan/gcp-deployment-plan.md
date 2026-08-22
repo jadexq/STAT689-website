@@ -380,7 +380,8 @@ account plus the five student addresses (§10).
 
 **Committed 2026-08-20** as `e83a46b` on branch `multi-user-and-deploy-prep`
 (29 files, +1045/-134), pushed. Two corrections to earlier notes here: the
-five-student roster reduction was already committed in `60c4e5f`, and git runs
+cast reduction (virtual students in `agents.ts`/`map.ts`, not the human
+roster) was already committed in `60c4e5f`, and git runs
 fine under `~/Documents` — the scratchpad-mirror workaround is not needed.
 
 ---
@@ -1076,6 +1077,66 @@ before the results are in would mean doing it twice.
    them are ever removed automatically. The free allowance is only 0.5 GB and a single Node
    image is ~75 MB, so roughly seven deploys fill it. Prune as you go, or set a cleanup policy
    on the repo.
+
+
+### 14n. Pre-Phase-C code changes (2026-08-22)
+
+Two changes, both local, both from Phase B findings. Committed on
+`multi-user-and-deploy-prep` after `main` was fast-forwarded to `09f5e81` so there is a
+known-good rollback point behind the auth change.
+
+**`b2129b1` — verify the IAP assertion.** `identity.ts` trusted
+`x-goog-authenticated-user-email`, which is unsigned. It now verifies
+`x-goog-iap-jwt-assertion` (ES256, node `crypto`, no new dependency) and treats the header as a
+cross-check that must agree. `identify()` became async, so `MainRoom.onAuth` did too; it was the
+only caller.
+
+Two things to hold on to, because both are silent failures:
+
+- **`dsaEncoding: "ieee-p1363"`.** JOSE signatures are raw `r||s`; node defaults to DER. Omit it
+  and *every genuine token* fails to verify.
+- **The audience is the Cloud Run resource path**, `/projects/343454961473/locations/us-central1/services/<svc>` —
+  not the OAuth client ID. That is the audience of the *inbound* token, a different thing.
+
+Key handling: cached an hour, refetched on an unknown `kid`, throttled **on the last attempt
+rather than the last success**. The first version throttled on success, which meant a genuine
+Google key rotation refused every login for the whole cooldown. The rotation test caught it.
+5s now — one reconnect for a student, no amplification for an attacker.
+
+**New deploy-time requirement.** `TRUST_IAP_HEADER=1` without `IAP_JWT_AUDIENCE` now **throws at
+startup**. That is deliberate: the alternative is every login failing during class with a symptom
+that looks nothing like the cause. Add `IAP_JWT_AUDIENCE` to the §6 deploy env alongside
+`TRUST_IAP_HEADER=1` and `ADMIN_EMAILS`. `IAP_JWKS_URL` exists only to point tests at a fake.
+
+**`90bbf1d` — reload instead of asking.** After eight failed retries the client printed "Reload
+the page to rejoin". Correct advice, but it needed a student to read grey text mid-class, and a
+full page load is the *only* recovery from an expired session (§14l.6). It now reloads itself,
+guarded by a `sessionStorage` timestamp to at most one reload per five minutes so a dead server
+cannot loop.
+
+**Tests.** New `scripts/iap-jwt.ts`, 16 cases, all passing — the existing suites run with
+`TRUST_IAP_HEADER` unset and never reach this code, so without it the verification would have
+shipped untested. It mints tokens against a local ES256 key served as a JWKS and asserts that a
+bare email header, a mismatched header, a foreign audience, a bad issuer, expired and
+not-yet-valid tokens, `alg=none`, a tampered payload, an unpublished key and garbage are each
+refused.
+
+**Two pre-existing test failures, confirmed not caused by these changes** — each reproduced on a
+clean checkout of `09f5e81`:
+
+- **`ghost-test.ts` is stale.** It asserts `entities === 12`, a number last touched in `fd767cb`
+  and never updated when `60c4e5f` cut the virtual cast. Fails at baseline (`got 7`) and after
+  (`got 10`); the count drifts because entities accumulate in a long-running server.
+- **`multiuser.ts` is order-dependent.** Passes against a fresh room, times out on "Terra
+  answered Ana (and is free again)" when run third, after `smoke` and `integration` have already
+  queued LLM work. Identical at baseline. It is a test-isolation problem, not a product bug.
+
+Neither is fixed here — worth doing, but not inside an auth change.
+
+**Still not verified against real IAP.** The spike is torn down, so the tests prove the
+verification logic against a local key, not that Google's tokens satisfy it. The claim shapes
+were taken from the real assertion captured in §14l.4. First contact with live IAP is Phase C,
+and `IAP_JWT_AUDIENCE` being wrong is the most likely thing to go wrong there.
 
 
 ### 14m. Hardening owed before students are on it — the runtime service account
