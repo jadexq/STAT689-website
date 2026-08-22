@@ -257,7 +257,7 @@ storage. This replaces it. Run top to bottom.
 - [x] Secret `ollama-key` exists, verified byte-identical to the local key
 - [x] OAuth client created; redirect URI added by hand (unconfirmed — open issue B4)
 - [x] `main` fast-forwarded to a known-good state
-- [ ] Instructor go-ahead on spend
+- [x] Instructor go-ahead on spend
 
 ### Stage 1a — clear the spike's leftover snapshot
 

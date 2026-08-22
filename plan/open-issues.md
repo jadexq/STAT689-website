@@ -10,7 +10,7 @@ shipped two days earlier and §14i still read "Still open" for closed items. **T
 status. The plan owns rationale.** When something is resolved, tick it here and leave the plan's
 account of it alone.
 
-Last reviewed: **2026-08-22**
+Last reviewed: **2026-08-22** (updated during the Phase C deploy)
 
 ---
 
@@ -51,7 +51,21 @@ because fixing tests inside an auth change is how you lose track of what broke w
 Things currently believed but not demonstrated. Each names what would actually settle it.
 
 ### B1. `IAP_JWT_AUDIENCE` has never been checked against a real Google token
-- [ ] **Open — highest-risk item in Phase C**
+- [x] **Resolved 2026-08-22, Phase C.** A real Google-minted assertion was driven through
+  `MainRoom.onAuth` -> `identify()` -> `verifyIapJwt` on the deployed service: the upgrade
+  logged `GET 101`, the client received its first frame, and the audience diagnostic fired
+  **zero** times. The deployed value is correct:
+  `/projects/343454961473/locations/us-central1/services/stat689`.
+- **How, for next time.** No browser is needed. Mint a bearer token for a throwaway service
+  account and drive a real WebSocket join:
+  `gcloud auth print-identity-token --audiences=<OAUTH_CLIENT_ID>
+  --impersonate-service-account=<SA> --include-email`.
+  **`--include-email` is not optional.** Without it IAP answers
+  `401 Invalid IAP credentials: JWT 'email' claim isn't a string`, which looks like a wrong
+  audience and is not. Cost half an hour to diagnose; do not repeat it.
+- **`onAuth` runs on the WebSocket upgrade, not on matchmaking** (Colyseus 0.15 `Room._onJoin`).
+  A plain `POST /matchmake/joinOrCreate/main` returns 200 without ever calling `identify()`, so
+  it proves nothing about auth. The probe must open the socket.
 - The 16 cases in `scripts/iap-jwt.ts` mint tokens with a *local* ES256 key. They prove the
   verification logic; they do not prove Google's tokens satisfy it. Claim shapes were copied from
   the real assertion captured in plan §14l.4, but the spike is torn down.
@@ -111,7 +125,8 @@ Things currently believed but not demonstrated. Each names what would actually s
   502, this failure explains itself, which is why it is fine to leave until then.
 
 ### B5. `--no-allow-unauthenticated` alongside `--iap` is unverified
-- [ ] **Open — resolves itself at Stage 2 of the runbook**
+- [x] **Resolved 2026-08-22, Phase C.** Deployed with both flags; a bearer-authenticated
+  `GET /` returned **200**. No 403, no redeploy needed. The stricter combination works.
 - The Phase B spike deployed `iap-spike` *without* `--no-allow-unauthenticated` and IAP still
   intercepted, so that combination is proven. The runbook uses the stricter one, which is what
   Google's design intends: `--iap` grants the IAP service agent `run.invoker`, and denying
@@ -147,7 +162,13 @@ Recorded so they are not rediscovered as if they were new problems.
 ## D. Debt and prerequisites
 
 ### D1. The runtime still inherits `roles/editor`
-- [ ] **Open — must be done before the first student logs in**
+- [x] **Resolved 2026-08-22, Phase C.** `stat689-app` created and set as the runtime service
+  account, holding only `roles/storage.objectUser` on the bucket and
+  `roles/secretmanager.secretAccessor` on `ollama-key`. Cloud Build still uses the default
+  compute account, as intended.
+- **The `objectUser` trap was verified, not just reasoned about.** Two activity rounds spaced
+  past the flush window produced **two** `[sync] flushed (changed)` lines, the second
+  overwriting `current.tar.gz`. Under `objectCreator` the second would have failed.
 - Full detail and commands in plan §14m. The default compute service account holds
   `roles/editor` on the whole project; the app should get a dedicated account with object access
   only.
@@ -180,6 +201,47 @@ Recorded so they are not rediscovered as if they were new problems.
   unattended. **Resolved when:** either a spend limit exists on the Ollama account, or a
   deliberate decision is recorded that none is wanted at the final class size.
 
+### D6. Cloud Run CPU throttling starves the snapshot writer between requests
+- [ ] **Open — found during Phase C verification, recommend fixing before class**
+- **Default Cloud Run allocates CPU only while a request is in flight.** `docker/sync.mjs watch`
+  is a background loop, so between requests it runs at near-zero CPU. The service currently has
+  no `run.googleapis.com/cpu-throttling: 'false'` annotation, so throttling is **on**.
+- **Measured, not theorised.** In the D1 verification the flush that happened right after
+  activity took **238 ms**; the one that happened while the instance was otherwise idle took
+  **10,200 ms**, and an earlier attempt failed outright:
+  `[sync] flush failed, will retry: The operation was aborted due to timeout`. Same payload
+  size, ~1 KB, both times. It retried and succeeded, so nothing was lost — this time.
+- **Why it matters beyond slowness.** `docker/start.sh` traps TERM to flush on shutdown, and
+  Cloud Run's shutdown grace period is short. A flush that takes ten seconds because the CPU is
+  throttled is racing a grace period of the same order. The loss would be bounded — at most the
+  state since the last successful flush — but it would be silent, and it would happen at
+  scale-down, i.e. right after a class ends.
+- **Recommended fix, and it does not cost an image:**
+  `gcloud run services update stat689 --region=us-central1 --project=stat689 --no-cpu-throttling`
+  This makes a new revision from the **existing** image, so it does not consume Artifact
+  Registry against D2.
+- **Spend impact is small but real.** CPU is then billed for the instance's whole lifetime
+  rather than per request. With `min-instances=0` the instance still scales to zero after
+  roughly fifteen idle minutes, so the exposure is bounded by actual class hours. At a handful
+  of hours a week this stays inside the 180,000 vCPU-second free allowance (about 50 instance
+  hours a month), which is the binding limit.
+- **Resolved when:** the annotation is set and a flush during an idle period completes in the
+  same order of time as one during activity.
+
+### D7. Verification artefacts are in the production bucket
+- [ ] **Open — do this before the first class, not before the next test**
+- The Phase C probes joined the real room as `iap-probe@stat689.iam.gserviceaccount.com`, so
+  that identity appears in the session log inside `gs://stat689-data/state/current.tar.gz` and
+  in `state/daily/2026-08-22.tar.gz`.
+- Not student-visible — it is a log file, not board or conversation state, and no TA
+  conversation or board post was created by the probes. But it is the same category of thing
+  Stage 1a had to clean up, and the cheapest moment to remove it is before anyone has real
+  state worth keeping.
+- **Do not run this after students have used the space** — it deletes their work.
+  `gcloud storage rm -r gs://stat689-data/state --project=stat689`
+- **Resolved when:** the bucket is wiped after browser verification finishes and before the
+  first class.
+
 ### D3. §6 of the plan was a pre-spike skeleton
 - [x] **Resolved 2026-08-22.** §6 rewritten as a five-stage runbook against §14f/§14l/§14m/§14n.
   All seven original steps were stale: the FUSE mount was abandoned, the API and bucket setup
@@ -209,6 +271,13 @@ Recorded so they are not rediscovered as if they were new problems.
 
 ## Resolved
 
-Nothing yet. Move items here with the date and the commit or command that settled them, rather
-than deleting them — a record of what turned out to be a non-issue is worth as much as the
-open list.
+Kept in place above with a `[x]` and a dated note, rather than moved here — a record of what
+turned out to be a non-issue is worth as much as the open list.
+
+**2026-08-22, Phase C deploy:** B1 (real Google token satisfies `IAP_JWT_AUDIENCE`),
+B5 (`--no-allow-unauthenticated` + `--iap`), D1 (least-privilege runtime account, with the
+`objectUser` overwrite actually exercised). D3 was resolved earlier the same day.
+
+Still open and needing a browser: **B4** (redirect URI — settles on first real sign-in) and
+**B3** (auto-reload guard). **B2** resolves by accident during a class. New from this
+deploy: **D6** (CPU throttling) and **D7** (bucket cleanup).
