@@ -169,6 +169,9 @@ Recorded so they are not rediscovered as if they were new problems.
 - **The `objectUser` trap was verified, not just reasoned about.** Two activity rounds spaced
   past the flush window produced **two** `[sync] flushed (changed)` lines, the second
   overwriting `current.tar.gz`. Under `objectCreator` the second would have failed.
+- **The full snapshot round trip is also proven**, which the runbook only asked for in part:
+  write -> `[sync] SIGTERM — final flush` on scale-down -> restart -> `[sync] restored 1 files
+  (1 KB) from gs://stat689-data/state`. Restore is no longer an assumption.
 - Full detail and commands in plan §14m. The default compute service account holds
   `roles/editor` on the whole project; the app should get a dedicated account with object access
   only.
@@ -202,7 +205,9 @@ Recorded so they are not rediscovered as if they were new problems.
   deliberate decision is recorded that none is wanted at the final class size.
 
 ### D6. Cloud Run CPU throttling starves the snapshot writer between requests
-- [ ] **Open — found during Phase C verification, recommend fixing before class**
+- [x] **Resolved 2026-08-22.** `gcloud run services update stat689 --no-cpu-throttling` —
+  revision `stat689-00002-c5j`, annotation confirmed `false`. Reused the existing image, so it
+  consumed no Artifact Registry (image count stayed at 3).
 - **Default Cloud Run allocates CPU only while a request is in flight.** `docker/sync.mjs watch`
   is a background loop, so between requests it runs at near-zero CPU. The service currently has
   no `run.googleapis.com/cpu-throttling: 'false'` annotation, so throttling is **on**.
@@ -211,11 +216,16 @@ Recorded so they are not rediscovered as if they were new problems.
   **10,200 ms**, and an earlier attempt failed outright:
   `[sync] flush failed, will retry: The operation was aborted due to timeout`. Same payload
   size, ~1 KB, both times. It retried and succeeded, so nothing was lost — this time.
-- **Why it matters beyond slowness.** `docker/start.sh` traps TERM to flush on shutdown, and
-  Cloud Run's shutdown grace period is short. A flush that takes ten seconds because the CPU is
-  throttled is racing a grace period of the same order. The loss would be bounded — at most the
-  state since the last successful flush — but it would be silent, and it would happen at
-  scale-down, i.e. right after a class ends.
+- **A stated reason for this that turned out to be wrong.** The original write-up argued the
+  TERM-trap flush in `docker/start.sh` would race the shutdown grace period at ten seconds a
+  flush. Evidence contradicts it: the shutdown of the throttled revision logged
+  `[sync] flushed (sigterm): 1 files, 1 KB -> 1 KB gz in **126ms**`. Cloud Run allocates CPU
+  during the shutdown grace period, so that path was never at risk. Recorded because the fix
+  was approved partly on this reasoning — the fix is still justified by the measurements above,
+  but not by this.
+- **What the fix actually buys:** periodic background flushes that complete promptly instead of
+  taking ten seconds and occasionally timing out. Lower risk of a retry backlog during a class,
+  not protection against a shutdown race.
 - **Recommended fix, and it does not cost an image:**
   `gcloud run services update stat689 --region=us-central1 --project=stat689 --no-cpu-throttling`
   This makes a new revision from the **existing** image, so it does not consume Artifact
@@ -225,8 +235,8 @@ Recorded so they are not rediscovered as if they were new problems.
   roughly fifteen idle minutes, so the exposure is bounded by actual class hours. At a handful
   of hours a week this stays inside the 180,000 vCPU-second free allowance (about 50 instance
   hours a month), which is the binding limit.
-- **Resolved when:** the annotation is set and a flush during an idle period completes in the
-  same order of time as one during activity.
+- **Still worth watching:** confirm an idle-period flush on the new revision completes in the
+  same order of time as one during activity. Not yet observed under `cpu-throttling: false`.
 
 ### D7. Verification artefacts are in the production bucket
 - [ ] **Open — do this before the first class, not before the next test**
