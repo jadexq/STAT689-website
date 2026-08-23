@@ -215,7 +215,54 @@ root under `DATA_DIR` so uploads and the shipped fixture can coexist, plus the u
 | # | Commit | What changes | Files |
 |---|---|---|---|
 | 3a | **Repo cards on the Computer Lab board** | A small `repos.json` (name, one-line description, URL — `github.com/jadexq/STAT689-project`) rendered as cards, instead of a raw pasted link. Config rather than a board post, so it survives a `boards.json` wipe — and D7 wipes state before the first class. | `virtual_space/server/repos.json`, `server/rooms/MainRoom.ts`, `client/src/main.ts` |
-| 3b | **The README joins the corpus** | Fetch the public repo's README at boot and on a slow interval, cache it under `DATA_DIR`, register it as a reading. Then "how do I contribute to the project?" is a grounded answer rather than a shrug. Public repo means no token. **The fetch must not block startup** and must fall back to the cached copy — a GitHub outage cannot be allowed to stop the class server from booting. | `virtual_ta/server/materials.ts`, `virtual_ta/server/repo.ts` |
+| 3b | **The README joins the corpus** | Fetch the public repo's README at boot and on a slow interval, cache it under `DATA_DIR`, register it as a reading. Then "how do I contribute to the project?" is a grounded answer rather than a shrug. Public repo means no token. **The fetch must not block startup** and must fall back to the cached copy — a GitHub outage cannot be allowed to stop the class server from booting. | `virtual_ta/server/materials.ts`, `virtual_ta/server/repo.ts`, `virtual_ta/server/paths.ts` |
+
+**Written 2026-08-23, after step 2 shipped.** Step 2 moved the ground under step 3 in five
+places. Each of these was implicit and would have been *guessed* by anyone picking this up cold.
+
+**1. The README cache is a THIRD root, not the upload root.** 2e made `DATA_DIR/materials` a
+corpus root with its own manifest, and `saveUpload()` rewrites that manifest **wholesale** — read,
+filter, write. A README writer sharing it would clobber any upload that landed between the read
+and the write. So: `DATA_DIR/repos`, its own manifest, one writer each. `ROOTS` is already an
+array, so this is one entry. Order is **uploads, then repos, then shipped** — first match wins, so
+the instructor can override a fetched README by uploading one under the same id, which is the
+right precedence and falls out for free.
+
+**2. 3a mirrors the Library shelf; `MainRoom.ts` is not involved.** The file list above named it,
+written before 2b existed. 2b settled the pattern: the space serves it over HTTP, the client
+fetches on room entry, and the cards render **above** the pinned posts. So `GET /api/repos` reads
+`repos.json` per request — no restart to edit it — and the client renders when
+`roomId === "computer-lab"`, exactly as it does for `"library"`. No websocket message, no room
+state, nothing in `init`. **Reuse the `.shelf-item` idiom** rather than inventing a third card
+style for the third board.
+
+**3. Which URL, and what failure means.** `raw.githubusercontent.com/<owner>/<repo>/HEAD/README.md`
+— verified 200 against the real repo, whose default branch is `main`. Use `HEAD`, not a hardcoded
+branch, so a default-branch rename does not silently 404. Raw is not the REST API, so the
+unauthenticated 60-requests-an-hour ceiling does not apply; no token, as planned. Fetch at boot
+and every few hours, never blocking. **On first-ever boot with no network there is no cached copy
+to fall back to** — "fall back to the cache" is not a complete rule on day one. Absent README =
+the corpus has one fewer reading. That is a normal state, not an error, and must not be a crash.
+
+**4. Only write the cache when the bytes changed.** `indexKey()` is size + mtime, so rewriting a
+byte-identical README on every interval would force a full reindex of the whole corpus every few
+hours for nothing. Compare first, write only on a difference.
+
+**5. The README is an ordinary reading.** Not `pinned` — it is prose, retrieval handles it, and it
+has headings so 2f's chunking applies as-is. Give it `link` = the repo URL so the TA can cite
+something clickable.
+
+**Two consequences to accept:**
+
+- **It appears in the Library as well.** 2b's shelf lists everything the manifest reports, so the
+  project README shows up on the Library shelf, not only behind the Computer Lab card. That is
+  correct — it is course material — but it is a consequence of 2b that step 3 did not intend, and
+  it means the Computer Lab card and the Library shelf entry point at the same document by
+  different routes.
+- **It makes the corpus two searchable documents for the first time.** The fixture corpus is one
+  searchable reading plus the pinned agenda, and `materials-test` currently prints *"only one
+  searchable document — cross-document ranking is not exercised here"*. 3b turns that on, which is
+  what actually closes the precondition on `open-issues.md` **E4** rather than merely arguing it.
 
 ### Consequences to accept
 
