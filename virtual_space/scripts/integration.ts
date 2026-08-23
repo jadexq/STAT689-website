@@ -61,6 +61,7 @@ async function main() {
     console.log(`  [student sees ${m.room}${m.skill ? ` · via ${m.skill}` : ""}] ${m.from}: ${m.text.slice(0, 110)}`);
   });
   student.onMessage("board", (m) => sBoards.push(m));
+  student.onMessage("adminFeeds", () => {});
   student.onMessage("typing", () => {});
   student.onMessage("adminAck", () => {});
   student.onMessage("doors", () => {});
@@ -84,6 +85,8 @@ async function main() {
   const notices: any[] = [];
   admin.onMessage("notice", (m) => notices.push(m));
   admin.onMessage("doors", () => {});
+  const feeds: any[] = [];
+  admin.onMessage("adminFeeds", (m) => feeds.push(m));
 
   const me = () => world.entities.find((e) => e.id === init?.you);
   const taEnt = () => world.entities.find((e) => e.id === "agent-ta");
@@ -187,6 +190,43 @@ async function main() {
   admin.send("admin", { action: "direct", agent: "sam", instruction: "Say hello to whoever is here." });
   await waitUntil(() => sChats.slice(sMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke where he lives");
   assert(at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), "…without going anywhere");
+
+  console.log("\n8. Announcements: pinned once, seen in an office, and known to the TA");
+  // The three halves of step 1 that only mean anything together: one feed on
+  // six office walls, the instructor's signature on it, and the TA able to
+  // answer from it. The fact below appears nowhere in the course materials,
+  // so a correct answer cannot come from anywhere else.
+  const FACT = "The project demo is on 2026/11/18 in room BLOC 411.";
+  assert(feeds.length > 0, "the admin was sent the boards on join — they have no avatar to walk with");
+  admin.send("admin", { action: "post", board: "announcements", text: FACT });
+  await wait(900);
+  const pinned = feeds[feeds.length - 1].feeds.announcements[0];
+  assert(pinned?.text === FACT, "pinned verbatim");
+  assert(/· Instructor$/.test(pinned.by), `signed by the instructor, not the TA: "${pinned.by}"`);
+
+  student.send("goto", spawnOf("office-s2"));
+  await waitUntil(() => at(me(), spawnOf("office-s2")), 30000, "student walked into an office");
+  await waitUntil(
+    () => sBoards.some((b) => b.roomId === "office-s2" && b.room === "Announcements" && b.items?.some((i: any) => i.text === FACT)),
+    10000,
+    "…and the office board shows the class announcement, titled Announcements rather than after the room"
+  );
+
+  student.send("goto", spawnOf("office-ta"));
+  await waitUntil(() => at(me(), spawnOf("office-ta")), 30000, "student walked to the TA office");
+  const mark8 = sChats.length;
+  student.send("chat", { text: "When is the project demo, and where?" });
+  await waitUntil(() => sChats.slice(mark8).some((c) => c.from === "TA"), 120000, "the TA answered");
+  // Models emit typographic spaces and hyphens (U+2011, U+202F...). Asserting
+  // on raw output makes a correct answer look like a failure — it did once.
+  const answer = sChats.slice(mark8).find((c) => c.from === "TA")!.text.replace(/[^\x20-\x7E]/g, " ");
+  assert(/11\s*\/\s*18|November\s+18/i.test(answer) && /BLOC\s*411/i.test(answer),
+    "…using the announcement, which is in no reading");
+
+  const feedMark = feeds.length;
+  admin.send("admin", { action: "unpin", board: "announcements", id: pinned.id });
+  await waitUntil(() => feeds.slice(feedMark).some((f) => f.feeds.announcements.length === 0), 5000,
+    "the instructor can unpin it again — a typo in a due date must not be permanent");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();
