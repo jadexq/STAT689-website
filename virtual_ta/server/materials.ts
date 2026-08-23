@@ -27,7 +27,14 @@ export interface Reading {
   link?: string;
 }
 
-const MATERIALS_DIR = path.join(import.meta.dirname, "..", "materials");
+// Where the corpus lives. Defaults to the repo's own materials/ folder;
+// MATERIALS_DIR points it somewhere else, which is how the real course
+// documents are tested locally without committing them — they are large and
+// some carry vendor names, and this repo is private only for now. The
+// deployed corpus question is settled separately (plan, step 2e).
+const MATERIALS_DIR = process.env.MATERIALS_DIR?.trim()
+  ? path.resolve(process.env.MATERIALS_DIR.trim())
+  : path.join(import.meta.dirname, "..", "materials");
 const MAX_READING_CHARS = 28_000;
 
 export async function listReadings(): Promise<Reading[]> {
