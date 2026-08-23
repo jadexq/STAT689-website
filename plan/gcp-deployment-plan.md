@@ -317,10 +317,33 @@ gcloud run deploy stat689 \
   --timeout=3600 --memory=1Gi \
   --no-allow-unauthenticated --iap \
   --set-secrets=OLLAMA_API_KEY=ollama-key:latest \
-  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
+  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~STUDENTS=jadewang@gmail.com=jade~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
 ```
 
+> ### ⚠ `STUDENTS` and the IAP grant are a PAIR — one without the other looks like a bug
+>
+> Every student needs **two** things, in two different places, and the failure modes look
+> nothing alike:
+>
+> | Missing | Symptom |
+> |---|---|
+> | the IAP grant (stage 3) | cannot sign in at all — Google refuses them |
+> | the `STUDENTS` entry (here) | signs in fine, and lands in the **Common Area** instead of their own office |
+>
+> The second is the dangerous one. Nothing is broken, nothing is logged to the student, and it
+> reads as "the app put me in the wrong place" rather than "one environment variable is
+> missing". The server does warn — `[roster] <address> has no student slot` — but only in the
+> Cloud Run log, which nobody is watching mid-class.
+>
+> **Do both, together, per person.** Tracked as `open-issues.md` **D5b** for the instructor's
+> own test account and **D5** for the four real students.
+
 Why each flag that is not obvious:
+
+- **`STUDENTS=jadewang@gmail.com=jade`** assigns a student character (an office and a display
+  name) to an address; see `virtual_space/server/roster.ts`. The value containing a second `=`
+  is fine — gcloud splits a `KEY=VALUE` pair on the *first* `=` only. Slots are `s1`…`s5` and
+  `jade`. Assigning a slot **removes its AI stand-in**: that office belongs to a person now.
 
 - **`--max-instances=1`** is correctness, not cost. Colyseus room state lives in one instance's
   RAM; a second instance scatters reconnecting students and breaks rooms silently.
@@ -365,11 +388,20 @@ gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
 gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
   --service=stat689 --region=us-central1 --project=stat689 \
   --member=user:jadewang@tamu.edu --role=roles/iap.httpsResourceAccessor
+
+# The instructor's test-STUDENT account. Pairs with STUDENTS=…=jade in stage 2 —
+# see the warning box there. Without this grant it cannot sign in; without the
+# env var it signs in and lands in the Common Area.
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadewang@gmail.com --role=roles/iap.httpsResourceAccessor
 ```
 
 `gcloud run services add-iam-policy-binding --role=roles/iap.httpsResourceAccessor` **errors** —
 it must be `gcloud iap web add-iam-policy-binding`. Add the other four students the same way,
-one command each; nothing else changes when you do.
+one command each — **and add each of them to `STUDENTS` at the same time**, or they sign in to
+the wrong room. Updating `STUDENTS` means `gcloud run services update stat689 --update-env-vars`,
+which is a new revision; the IAP binding is not.
 
 ### Stage 4 — verify, in this order
 
@@ -380,7 +412,12 @@ one command each; nothing else changes when you do.
 3. **Check the startup log** for `Auth: IAP, JWT-verified (aud: …)`. If instead it shows the
    audience diagnostic, take the "received" value and redeploy.
 4. **Sign in as `jadewang@tamu.edu`** in a separate profile. It must arrive as a *student* — no
-   admin panel — which is the real point of using a second account.
+   admin panel — which is the real point of using a second account. It has no `STUDENTS` slot,
+   so the Common Area is the *correct* landing spot for this one.
+4b. **Sign in as `jadewang@gmail.com`.** This one must land in **Jade's Office**, not the Common
+   Area. If it lands in the Common Area the IAP grant worked and the `STUDENTS` variable did
+   not — see the warning box in stage 2. Check the startup log line
+   `Roster: 6 student slots — 1 assigned (Jade), …`; "0 assigned" names the problem outright.
 5. **One full TA conversation and one board post**, to prove the Ollama key resolved from Secret
    Manager.
 6. **Snapshot round trip.** Confirm **two** `[sync] flushed (changed)` lines in the log, not one
@@ -392,8 +429,9 @@ one command each; nothing else changes when you do.
 
 - **Prune Artifact Registry.** 0.5 GB free, ~107 MB per image, so about four deploys fills it and
   nothing prunes automatically (open issue D2).
-- **Tick off** B1, B3, B4 and D1 in `open-issues.md`.
-- Add the remaining four students when the class starts.
+- **Tick off** B1, B3, B4, D1 and D5b in `open-issues.md`.
+- Add the remaining four students when the class starts — **IAP grant *and* a `STUDENTS` slot
+  each**, per the warning box in stage 2.
 
 ## 7. Testing
 
@@ -444,7 +482,10 @@ one command each; nothing else changes when you do.
 
 1. **The Google account that should be admin** — presumably your personal one, since `stat689`
    isn't on TAMU.
-2. **The 5 students' Google addresses** (for the IAP allowlist and the `ROSTER` display names).
+2. **The 5 students' Google addresses.** Each one needs an IAP grant *and* a `STUDENTS` slot
+   assignment (`s1`…`s5`), which are separate places — see the warning box in §6 stage 2. A
+   `ROSTER` display name is optional and can come later; until then the student shows as the
+   character they took over (Sam, Ben, …).
 
 Neither blocks Phase A; both block Phase C.
 

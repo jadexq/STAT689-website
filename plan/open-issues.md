@@ -14,6 +14,19 @@ account of it alone.
 Last reviewed: **2026-08-22** (updated after the TA simplification — see
 [`app-changes.md`](./app-changes.md))
 
+> ### Read these two before the next deploy
+>
+> Everything else in this file can be discovered by testing. These two cannot — they fail
+> quietly, or they fail once and are then irreversible.
+>
+> - **[D5b](#d5b-every-account-needs-two-things--the-iap-grant-and-a-students-slot) — every
+>   account needs an IAP grant *and* a `STUDENTS` slot.** Miss the grant and they cannot sign
+>   in, which is obvious. Miss the slot and they sign in perfectly and land in the wrong room,
+>   which is not.
+> - **[D7](#d7-verification-artefacts-are-in-the-production-bucket--wipe-before-the-first-class)
+>   — wipe the bucket before a student uses the deployed space.** Time-limited: after that the
+>   same command destroys their work, and the bucket has no versioning.
+
 ---
 
 ## A. Test failures
@@ -298,12 +311,39 @@ Recorded so they are not rediscovered as if they were new problems.
   JWT-verified email rather than to anything client-supplied, and the student path is not
   merely untested-and-assumed-safe. This was the point of using a second real account instead
   of a `?as=` dev identity, which cannot prove anything about the deployed auth path.
-- **Granting one changes nothing else.** IAP grants are per-account and additive, and the five
-  student offices `office-s1`…`office-s5` are static geometry in `map.ts`. `ROSTER` only maps
-  email to display name in `identity.ts` — nothing derives rooms from it, so the other four
-  offices simply stand empty.
+- **Granting one is no longer the whole job.** This bullet used to read "granting one changes
+  nothing else", and that stopped being true on 2026-08-22: rooms are now derived from an
+  address via `STUDENTS` (`virtual_space/server/roster.ts`). Each student needs the IAP grant
+  **and** a slot — see **D5b**. Assigning a slot also removes that character's AI stand-in, so
+  the office stops being staffed and starts belonging to a person.
+- `ROSTER` remains optional: it overrides the display name once you know what a student is
+  actually called. Until then they appear as the character they took over.
 - **Keep real student addresses out of this repo** when the other four arrive. Both files here
   are tracked; use a local file or pass them straight to `gcloud`. Git history outlives an edit.
+
+### D5b. EVERY ACCOUNT NEEDS TWO THINGS — the IAP grant *and* a `STUDENTS` slot
+- [ ] **Open. Applies to every student, not just the test account. DO BOTH, PER PERSON.**
+- The two live in different places and fail in ways that look nothing alike:
+
+  | Missing | Symptom |
+  |---|---|
+  | IAP grant (`roles/iap.httpsResourceAccessor`) | cannot sign in at all — Google refuses them |
+  | `STUDENTS=<address>=<slot>` in the Cloud Run env | signs in fine, lands in the **Common Area** instead of their own office |
+
+- **The second is the one that will waste an afternoon.** Nothing is broken, nothing is shown to
+  the student, and it reads as "the app put me in the wrong room" rather than "one environment
+  variable is missing". The server logs `[roster] <address> has no student slot`, but only to
+  Cloud Run, which nobody is watching mid-class.
+- **Fastest check:** the startup line `Roster: 6 student slots — N assigned (…)`. `0 assigned`
+  names the problem outright.
+- **Outstanding now:** `jadewang@gmail.com` (the instructor's own test-student account) has
+  neither. It works locally because `virtual_space/.env` assigns the slot; `.env` is not
+  deployed. Slot `jade` → Jade's Office.
+- **Also note:** adding a `STUDENTS` entry is a Cloud Run env change, so it creates a **new
+  revision**. The IAP grant does not. Batch the env updates rather than doing one per student.
+- Written into the runbook at [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §6 stage 2
+  (warning box), stage 3, verify step 4b, and stage 5.
+- Distinct from **D5**, which is about *obtaining* the four real student addresses.
 
 ### D6. Cloud Run CPU throttling starves the snapshot writer between requests
 - [x] **Resolved 2026-08-22.** `gcloud run services update stat689 --no-cpu-throttling` —
@@ -437,6 +477,27 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   students asking at once both end up answered or both told to wait.~~ Met: the second student is
   told, at the door, that someone is with the TA and who. Verified by `multiuser` steps 6-7.
 
+### E3. Bullet lists and headings still arrive as raw markdown in the space chat
+- [ ] **Open — cosmetic, low cost to live with, cheap to finish.**
+- The chat bubble renders bold, inline code and links (`ea9bb22`), which covers most of what the
+  TA writes. Lists (`- `), numbered lists and `##` headings still show their markers.
+- Mitigated from the other side: the coach prompt now asks for conversational sentences rather
+  than documents, which is why this went from constant to occasional. A prompt is a request, not
+  a guarantee — a long enough answer still reaches for a list.
+- **Resolved when:** either the renderer handles lists, or a stripping pass runs on TA replies
+  before they leave the server. Do not do both.
+
+### E4. Cross-document retrieval has never been exercised
+- [ ] **Open — not a defect. A gap in what the evidence can support.**
+- `materials/manifest.json` lists **one** reading, so every part of `searchMaterials` that exists
+  to choose *between* documents — the idf weighting, the title boost, `MAX_CHUNKS_PER_DOC` — is
+  running but has nothing to discriminate. `scripts/materials-test.ts` says so out loud rather
+  than passing quietly.
+- The risk is not that search breaks; it is that it looks fine now and ranks badly the week the
+  instructor adds ten readings, with no baseline to compare against.
+- **Resolved when:** the real corpus is in place and a handful of course questions are checked to
+  see whether the passage that comes back is the one a human would have picked.
+
 ### E5. A virtual student stood in the TA office and joined every conversation
 - [x] **Resolved 2026-08-22 in `cf8bdb4` — reported by the instructor while testing as a student.**
 - **What happened.** Sam was standing at (38,16), inside the TA office, so `scheduleReplies` —
@@ -465,35 +526,6 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 - Fixed by `server/roster.ts`: six student characters, one office each, addresses assigned in the
   environment. See `app-changes.md` for the design and why a slot is a character rather than a
   person.
-
-### D5b. `jadewang@gmail.com` is not on the IAP allowlist
-- [ ] **Open — blocks the instructor's own student-side testing in the cloud.**
-- The test-student account works locally (`STUDENTS` in `virtual_space/.env`). For the deployed
-  service it needs two things, and neither is done: **IAP access** (`roles/iap.httpsResourceAccessor`)
-  and **`STUDENTS=jadewang@gmail.com=jade` in the Cloud Run environment**. Without the second it
-  signs in and lands in the Common Area, which looks like a bug rather than a missing variable.
-- Distinct from D5, which is about the four real student addresses.
-
-### E3. Bullet lists and headings still arrive as raw markdown in the space chat
-- [ ] **Open — cosmetic, low cost to live with, cheap to finish.**
-- The chat bubble renders bold, inline code and links (`ea9bb22`), which covers most of what the
-  TA writes. Lists (`- `), numbered lists and `##` headings still show their markers.
-- Mitigated from the other side: the coach prompt now asks for conversational sentences rather
-  than documents, which is why this went from constant to occasional. A prompt is a request, not
-  a guarantee — a long enough answer still reaches for a list.
-- **Resolved when:** either the renderer handles lists, or a stripping pass runs on TA replies
-  before they leave the server. Do not do both.
-
-### E4. Cross-document retrieval has never been exercised
-- [ ] **Open — not a defect. A gap in what the evidence can support.**
-- `materials/manifest.json` lists **one** reading, so every part of `searchMaterials` that exists
-  to choose *between* documents — the idf weighting, the title boost, `MAX_CHUNKS_PER_DOC` — is
-  running but has nothing to discriminate. `scripts/materials-test.ts` says so out loud rather
-  than passing quietly.
-- The risk is not that search breaks; it is that it looks fine now and ranks badly the week the
-  instructor adds ten readings, with no baseline to compare against.
-- **Resolved when:** the real corpus is in place and a handful of course questions are checked to
-  see whether the passage that comes back is the one a human would have picked.
 
 ---
 
