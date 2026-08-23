@@ -113,6 +113,12 @@
 
   #post-box { border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
   #post-box .admin-title { color: var(--warn); margin-bottom: 6px; }
+  #post-feed { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
+  .feed-item { display: flex; gap: 8px; align-items: flex-start; background: #1f1b10; border: 1px solid #5a4a22; border-radius: 8px; padding: 6px 8px; font-size: 12.5px; }
+  .feed-item span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .feed-item button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .feed-item button:hover { color: #ff8fa3; }
+  .feed-empty { color: var(--muted); font-size: 12px; font-style: italic; }
   #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
   #mic-toggle.on { background: #4d2020; border-color: #a04545; }
 </style>
@@ -168,6 +174,9 @@
           <select id="board-sel"></select>
           <button id="post-send" class="primary">Pin</button>
         </div>
+        <!-- What is currently on the selected board. The instructor has no
+             avatar and cannot walk up to a board to read it back. -->
+        <div id="post-feed"></div>
       </div>
       <hr class="sep">
       <div class="row">

@@ -49,7 +49,7 @@ import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, doorOf, findPath,
 import type { RoomDef } from "../map";
 import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
-import { getBoard, postToBoard } from "../boards";
+import { getBoard, postToBoard, removeFromBoard } from "../boards";
 import { logEvent } from "../logger";
 import { identify, type Identity } from "../identity";
 import { homeRoomFor, UNASSIGNED_ROOM } from "../roster";
@@ -225,6 +225,7 @@ export class MainRoom extends Room {
       // Current state, because `doors` is only broadcast on change.
       shut: this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id),
     });
+    if (isAdmin) this.sendAdminFeeds(client);
     this.broadcastWorld();
   }
 
@@ -665,6 +666,7 @@ export class MainRoom extends Room {
       const item = postToBoard(target.id, this.instructorSig(client), text);
       logEvent("board_post", { feed: target.id, by: item.by, text: item.text });
       this.sendFeedToViewers(target.id);
+      this.sendAdminFeeds();
       if (target.id === ANNOUNCEMENTS) {
         // No in-room chat line here. The room version below speaks as the TA,
         // who is standing in their office; an announcement lands in six rooms
@@ -682,6 +684,19 @@ export class MainRoom extends Room {
         });
         client.send("adminAck", { ok: true, note: `Posted to the ${target.label} board.` });
       }
+      return;
+    }
+
+    if (action === "unpin") {
+      const target = POST_TARGETS.find((t) => t.id === String(msg?.board || ""));
+      const id = String(msg?.id || "");
+      if (!target || !removeFromBoard(target.id, id)) {
+        return client.send("adminAck", { ok: false, note: "Nothing to unpin — it may already be gone." });
+      }
+      logEvent("board_unpin", { feed: target.id, item: id });
+      this.sendFeedToViewers(target.id);
+      this.sendAdminFeeds();
+      client.send("adminAck", { ok: true, note: `Unpinned from ${target.label}.` });
       return;
     }
 
@@ -755,6 +770,18 @@ export class MainRoom extends Room {
       room: feed === ANNOUNCEMENTS ? "Announcements" : def.label,
       items: getBoard(feed),
     });
+  }
+
+  // The instructor's own view of the boards. They have no avatar — their keys
+  // drive the TA, who stands in an office with no board — so they can never
+  // walk up to a noticeboard and read it back. Without this they cannot see
+  // what they posted, and a typo in a due date would be permanent.
+  private sendAdminFeeds(only?: Client) {
+    const feeds: Record<string, unknown> = {};
+    for (const t of POST_TARGETS) feeds[t.id] = getBoard(t.id);
+    for (const c of only ? [only] : this.clients) {
+      if (this.admins.has(c.sessionId)) c.send("adminFeeds", { feeds });
+    }
   }
 
   // Refresh everyone currently looking at a feed. Keyed by feed rather than

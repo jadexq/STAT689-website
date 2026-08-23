@@ -606,6 +606,10 @@ function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: 
 }
 
 // Board posting: the instructor's own text, pinned exactly as typed.
+type FeedItem = { id: string; by: string; text: string; ts: string };
+let adminFeeds: Record<string, FeedItem[]> = {};
+let onAdminFeeds: (() => void) | null = null;
+
 function chatMode(): "private" | "speak" {
   const el = document.querySelector<HTMLInputElement>('input[name="cmode"]:checked');
   return el?.value === "speak" ? "speak" : "private";
@@ -640,6 +644,37 @@ function wirePanel() {
     o.textContent = t.label;
     boardSel.appendChild(o);
   }
+
+  // What is on each board the instructor can post to, so they can read back
+  // and unpin. Kept here rather than on the world map because the instructor
+  // has no avatar to walk to a board with.
+  const renderFeed = () => {
+    const box = $<HTMLDivElement>("post-feed");
+    box.innerHTML = "";
+    const items = adminFeeds[boardSel.value] || [];
+    if (!items.length) {
+      const d = document.createElement("div");
+      d.className = "feed-empty";
+      d.textContent = "Nothing pinned here yet.";
+      box.appendChild(d);
+      return;
+    }
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "feed-item";
+      const t = document.createElement("span");
+      t.textContent = item.text;
+      const x = document.createElement("button");
+      x.textContent = "✕";
+      x.title = "Unpin";
+      x.onclick = () => room.send("admin", { action: "unpin", board: boardSel.value, id: item.id });
+      row.append(t, x);
+      box.appendChild(row);
+    }
+  };
+  boardSel.onchange = renderFeed;
+  onAdminFeeds = renderFeed;
+  renderFeed();
 
   const send = () => {
     const input = $<HTMLInputElement>("chat-input");
@@ -855,6 +890,10 @@ function wireRoom(client: Client) {
   });
 
   room.onMessage("board", renderBoard);
+  room.onMessage("adminFeeds", (msg: { feeds: Record<string, FeedItem[]> }) => {
+    adminFeeds = msg.feeds || {};
+    onAdminFeeds?.();
+  });
 
   room.onMessage("notice", (msg: { text: string }) => {
     addMsg({ who: "system", text: msg.text, cls: "sys" });
