@@ -503,8 +503,14 @@ Recorded so they are not rediscovered as if they were new problems.
 - Planned as [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15d item 2.
 
 ### D12. How many of the six slots do real students get?
-- [ ] **Deferred by the instructor, 2026-08-23. Revisit when the class list is final.**
-- The roster has **six** slots. Two are now held by test accounts (`s6` and `s1`), leaving four
+- [ ] **Half-decided 2026-08-23. Still open on the number; revisit when the class list is final.**
+- **Decided:** the second test account is retired from `s1`, freeing it for a real student. The
+  instructor's own test account **keeps `s6`** so that student-side behaviour stays testable
+  against the live service. That fixes the supply at **five offices for students**.
+- **Still open:** the class size. If it is six, one more office must be added to `server/map.ts`
+  — a code change, not config. The top band is full at x=1..41, so it is a layout change too.
+- Checklist for the day this is answered: [`go-live.md`](./go-live.md).
+- The roster has **six** slots. Two were held by test accounts (`s6` and `s1`), leaving four
   for real students. The class is expected to be about six.
 - Nothing is broken either way — `homeRoomFor` sends an unassigned address to the Common Area, and
   the handout rotation is exact at six students against six versions and degrades correctly below
