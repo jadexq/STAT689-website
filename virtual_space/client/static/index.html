@@ -146,6 +146,12 @@
   .feed-empty { color: var(--muted); font-size: 12px; font-style: italic; }
   #upload-box { border: 1px solid #2c5443; background: #16281f; border-radius: 10px; padding: 10px 12px; }
   #upload-box .admin-title { color: var(--ok); margin-bottom: 8px; }
+  #hadmin-box .admin-title { color: var(--accent); margin-bottom: 8px; }
+  #hadmin-list { display: flex; flex-direction: column; gap: 7px; }
+  .hadmin-row { font-size: 12.5px; color: var(--muted); }
+  .hadmin-row b { display: block; color: var(--ink); font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .hadmin-row a { color: var(--accent); text-decoration: none; margin-right: 10px; }
+  .hadmin-row a:hover { text-decoration: underline; }
   #upload-box .row { margin-bottom: 8px; }
   #upload-box .row:last-child { margin-bottom: 0; }
   #upload-box input[type=file] { flex: 1; font-size: 12px; padding: 5px 7px; background: #10201a; border-color: #2c5443; }
@@ -250,6 +256,17 @@
           </label>
           <button id="up-send" class="primary">Upload</button>
         </div>
+      </div>
+      <hr class="sep">
+      <!-- Handouts are uploaded as one bundle (npm run bundle:handout), not
+           file by file: at six versions a handout is two dozen files. -->
+      <div id="hadmin-box">
+        <div class="admin-title">📝 Handouts</div>
+        <div class="row">
+          <input type="file" id="ho-file" accept=".json" style="flex:1">
+          <button id="ho-send" class="primary">Upload bundle</button>
+        </div>
+        <div id="hadmin-list"></div>
       </div>
       <hr class="sep">
       <div class="row">

@@ -24,12 +24,15 @@ import {
   saltState,
   saveBundle,
   saveRecord,
+  summarise,
+  exportPairs,
+  exportRecords,
   studentHash,
   studentIndex,
   validateBundle,
   type Bundle,
 } from "./handouts";
-import { judgeScript, renderHandoutPage, renderJudgeWidget } from "./handout-render";
+import { judgeScript, renderDashboard, renderHandoutPage, renderJudgeWidget } from "./handout-render";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -176,6 +179,16 @@ app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (r
 // worse than a forged reading.
 
 app.post("/api/handouts", async (req, res) => {
+  // The salt check runs before identify() on every handout route. Whether the
+  // feature is configured has nothing to do with who is asking, and "handouts
+  // are disabled, here is why" is a truer answer to a misconfigured deployment
+  // than "who are you?". It also leaks nothing an unauthenticated caller could
+  // not learn by the feature simply not working.
+  const salt = saltState();
+  if (!salt.ok) {
+    res.status(503).json({ ok: false, note: salt.note });
+    return;
+  }
   let who;
   try {
     who = await identify(req, req.query.as);
@@ -186,11 +199,6 @@ app.post("/api/handouts", async (req, res) => {
   if (!who.isAdmin) {
     logEvent("handout_upload_denied", { email: who.email });
     res.status(403).json({ ok: false, note: "Only the instructor can add a handout." });
-    return;
-  }
-  const salt = saltState();
-  if (!salt.ok) {
-    res.status(503).json({ ok: false, note: salt.note });
     return;
   }
   try {
@@ -229,14 +237,14 @@ app.post("/api/handouts", async (req, res) => {
 // "what exists", plus how far this reader has got with each.
 app.get("/api/handouts", async (req, res) => {
   try {
-    const who = await identify(req, req.query.as).catch(() => null);
-    if (!who) {
-      res.status(401).json({ handouts: [] });
-      return;
-    }
     const salt = saltState();
     if (!salt.ok) {
       res.status(503).json({ handouts: [], note: salt.note });
+      return;
+    }
+    const who = await identify(req, req.query.as).catch(() => null);
+    if (!who) {
+      res.status(401).json({ handouts: [] });
       return;
     }
     const bundles = await listBundles();
@@ -274,6 +282,11 @@ app.get("/api/handouts", async (req, res) => {
 app.get("/handout/:id", async (req, res) => {
   const page = (status: number, msg: string) =>
     res.status(status).type("html").send(renderMarkdownPage("Handout", msg));
+  const salt = saltState();
+  if (!salt.ok) {
+    page(503, `# Handouts are unavailable\n\n${salt.note}`);
+    return;
+  }
   let who;
   try {
     who = await identify(req, req.query.as);
@@ -282,11 +295,6 @@ app.get("/handout/:id", async (req, res) => {
     return;
   }
   try {
-    const salt = saltState();
-    if (!salt.ok) {
-      page(503, `# Handouts are unavailable\n\n${salt.note}`);
-      return;
-    }
     const id = safeId(req.params.id);
     const bundle = id ? await loadBundle(id) : null;
     if (!bundle) {
@@ -335,6 +343,11 @@ app.get("/handout/:id", async (req, res) => {
 // NEVER from the body — this is a write open to students, which is exactly why
 // the record is keyed by the caller rather than by what the caller claims.
 app.post("/api/handouts/:id/feedback", async (req, res) => {
+  const salt = saltState();
+  if (!salt.ok) {
+    res.status(503).json({ ok: false, note: salt.note });
+    return;
+  }
   let who;
   try {
     who = await identify(req, req.query.as);
@@ -343,11 +356,6 @@ app.post("/api/handouts/:id/feedback", async (req, res) => {
     return;
   }
   try {
-    const salt = saltState();
-    if (!salt.ok) {
-      res.status(503).json({ ok: false, note: salt.note });
-      return;
-    }
     if (who.isAdmin) {
       // The preview records nothing, and this is the second place that has to
       // be true: a curl from the admin must not be able to do what the page
@@ -385,6 +393,67 @@ app.post("/api/handouts/:id/feedback", async (req, res) => {
   } catch (err) {
     console.error(`[space] handout feedback: ${(err as Error).message}`);
     res.status(500).json({ ok: false, note: "Could not save that." });
+  }
+});
+
+// What the instructor came for. Aggregated by section rather than by person,
+// worst first, comments verbatim — the grades are the index into the comments,
+// so the view is ordered to put the section worth rewriting at the top.
+//
+// The two JSONL exports are the same data in the two shapes it is wanted in:
+// one line per record for a reward model, and derived (objective, chosen,
+// rejected) triples for DPO. The pairs are built at export time and never
+// stored — they are a view over the records, not a second source of truth.
+app.get("/admin/handouts/:id", async (req, res) => {
+  const salt = saltState();
+  if (!salt.ok) {
+    res.status(503).type("text/plain").send(salt.note);
+    return;
+  }
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).type("text/plain").send("Could not verify who you are.");
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("handout_dashboard_denied", { email: who.email });
+    res.status(403).type("text/plain").send("Only the instructor can read handout feedback.");
+    return;
+  }
+  try {
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      res.status(404).type("text/plain").send("No such handout.");
+      return;
+    }
+    if (req.query.format === "jsonl") {
+      const lines: unknown[] = [];
+      let note = "";
+      if (req.query.pairs) {
+        const { pairs, stale, ties } = await exportPairs(bundle);
+        lines.push(...pairs);
+        note = `${pairs.length} pair(s), ${ties} tie(s) dropped, ${stale} record(s) skipped as stale`;
+      } else {
+        lines.push(...(await exportRecords(bundle)));
+        note = `${lines.length} record(s)`;
+      }
+      logEvent("handout_export", { by: who.email, id: bundle.handout_id, pairs: !!req.query.pairs, note });
+      res
+        .type("application/x-ndjson")
+        .setHeader(
+          "content-disposition",
+          `attachment; filename="${bundle.handout_id}${req.query.pairs ? "-pairs" : "-records"}.jsonl"`
+        );
+      res.send(lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length ? "\n" : ""));
+      return;
+    }
+    res.type("html").send(renderDashboard(await summarise(bundle)));
+  } catch (err) {
+    console.error(`[space] handout dashboard: ${(err as Error).message}`);
+    res.status(500).type("text/plain").send("Could not read that handout's feedback.");
   }
 });
 

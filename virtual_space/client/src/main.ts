@@ -932,6 +932,66 @@ function wirePanel() {
     }
   };
 
+  // Handouts. Uploaded as one bundle rather than file by file: at six versions
+  // a handout is two dozen markdown files, and `npm run bundle:handout` has
+  // already validated them into a single JSON. The server validates again.
+  async function refreshHandoutAdmin() {
+    const box = $<HTMLDivElement>("hadmin-list");
+    let handouts: HandoutCard[] = [];
+    try {
+      handouts = ((await (await fetch("/api/handouts")).json()) as { handouts?: HandoutCard[] }).handouts ?? [];
+    } catch {
+      /* leave the list as it was rather than blanking it on one bad fetch */
+      return;
+    }
+    box.innerHTML = "";
+    if (!handouts.length) {
+      const d = document.createElement("div");
+      d.className = "hadmin-row";
+      d.textContent = "Nothing uploaded yet.";
+      box.appendChild(d);
+      return;
+    }
+    for (const h of handouts) {
+      const d = document.createElement("div");
+      d.className = "hadmin-row";
+      const id = encodeURIComponent(h.id);
+      d.innerHTML =
+        `<b>${escapeHtml(h.title)}</b>` +
+        `<a href="/handout/${id}" target="_blank" rel="noopener">preview</a>` +
+        `<a href="/admin/handouts/${id}" target="_blank" rel="noopener">feedback</a>` +
+        `${escapeHtml(h.chapter)} · ${h.sections} sections`;
+      box.appendChild(d);
+    }
+  }
+  void refreshHandoutAdmin();
+
+  $<HTMLButtonElement>("ho-send").onclick = async () => {
+    const picker = $<HTMLInputElement>("ho-file");
+    const file = picker.files?.[0];
+    if (!file) return setAdminStatus("Pick a .handout.json bundle first.", false);
+    setAdminStatus(`Uploading ${file.name}…`, true);
+    try {
+      const res = await fetch("/api/handouts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: await file.text(),
+      });
+      const body = (await res.json()) as { ok: boolean; note?: string; handout_id?: string; sections?: number; versions?: number; problems?: string[] };
+      if (body.ok) {
+        setAdminStatus(`${body.handout_id}: ${body.sections} sections × ${body.versions} versions.`, true);
+        picker.value = "";
+        void refreshHandoutAdmin();
+      } else {
+        // The bundler's own messages, passed through — they name the file and
+        // the fault, which is the whole reason it refuses rather than warns.
+        setAdminStatus([body.note, ...(body.problems ?? [])].filter(Boolean).join(" "), false);
+      }
+    } catch {
+      setAdminStatus("The bundle did not go through.", false);
+    }
+  };
+
   // Lecturer mic → class transcript in the TA brain (Chrome Web Speech).
   const micBtn = $<HTMLButtonElement>("mic-toggle");
   const micState = $<HTMLSpanElement>("mic-state");

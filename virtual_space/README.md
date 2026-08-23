@@ -90,9 +90,12 @@ npx tsx scripts/smoke.ts        # core loop: movement, roles, chat, boards
 npx tsx scripts/integration.ts  # full TA↔space wiring, all room modes
 npx tsx scripts/multiuser.ts    # two identities coexist; admin is granted,
                                 # not claimed; separate TA conversations
+npx tsx scripts/handout-test.ts # feedback handouts: version rotation, the
+                                # write path, the exports — brings its own
+                                # server, so nothing else need be running
 ```
 
-All three need the two servers running and a **fresh** space server (agents
+The first three need the two servers running and a **fresh** space server (agents
 keep their positions between client connections), and make a few real LLM
 calls. To run them against the container instead, set `VS_URL=ws://localhost:8080`
 and `TA_LOGS_DIR` to wherever that container's `ta/logs` is readable.
@@ -104,6 +107,9 @@ Last full pass: 2026-08-21.
 server/   Colyseus world: movement, same-room chat, admin, agents, JSONL logging
           ta.ts — HTTP client for the Virtual TA brain
 client/   Phaser game + chat + admin panel (bundle built by esbuild)
-scripts/  smoke.ts, integration.ts — end-to-end tests
+fixtures/ handout-sample/ — a tracked handout the suite runs against, plus
+          handout-bad/* which the bundler must refuse
+scripts/  smoke.ts, integration.ts, handout-test.ts — end-to-end tests
+          bundle-handout.ts — validate a handout folder into one bundle
 data/     session logs (git-ignored)
 ```

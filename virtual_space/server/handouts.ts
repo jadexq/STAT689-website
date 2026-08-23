@@ -425,3 +425,178 @@ export async function saveRecord(
   if (!record) return { ok: false, note: "Open the handout before grading it." };
   return { ok: true, record };
 }
+
+// ---------------------------------------------------------------------------
+// Reading the result back
+// ---------------------------------------------------------------------------
+
+export interface SectionSummary {
+  section_id: string;
+  title: string;
+  learning_objective: string;
+  responded: number;
+  /** Mean of the grades given, or null if nobody graded it. Worst-first order
+   *  is by this — the point of the view is which section to rewrite next. */
+  mean: number | null;
+  tagCounts: [string, number][];
+  rows: {
+    version_id: string;
+    approach: string;
+    prompt_template: string;
+    grade: number | null;
+    tags: string[];
+    comment: string;
+    /** First 8 hex of the salted hash: enough to notice one rater who grades
+     *  everything harshly, not a view organised around people. */
+    who: string;
+    /** False once the instructor has edited this version since it was graded. */
+    current: boolean;
+  }[];
+}
+
+export interface HandoutSummary {
+  bundle: Bundle;
+  /** Everyone on the roster is expected to answer; that is the denominator. */
+  cohort: number;
+  sections: SectionSummary[];
+}
+
+export async function summarise(bundle: Bundle): Promise<HandoutSummary> {
+  const files = await listStudentFiles(bundle.handout_id);
+  const sections: SectionSummary[] = [];
+
+  for (const s of bundle.sections) {
+    const rows: SectionSummary["rows"] = [];
+    const tagCounts = new Map<string, number>();
+    let sum = 0;
+    let graded = 0;
+
+    for (const f of files) {
+      const r = f.records[s.section_id];
+      if (!r) continue;
+      if (r.grade !== null) {
+        sum += r.grade;
+        graded++;
+      }
+      for (const t of r.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+      rows.push({
+        version_id: r.version_id,
+        approach: s.bodies[r.version_id]?.approach ?? "?",
+        prompt_template: r.generation.prompt_template,
+        grade: r.grade,
+        tags: r.tags,
+        comment: r.comment,
+        who: r.student_hash.slice(0, 8),
+        current: s.bodies[r.version_id]?.content_sha === r.content_sha,
+      });
+    }
+    // Worst grade first, then whoever left a comment, then ungraded. The
+    // grades are the index into the comments, not the finding.
+    rows.sort((a, b) => (a.grade ?? 99) - (b.grade ?? 99) || (b.comment ? 1 : 0) - (a.comment ? 1 : 0));
+
+    sections.push({
+      section_id: s.section_id,
+      title: s.title,
+      learning_objective: s.learning_objective,
+      responded: rows.length,
+      mean: graded ? sum / graded : null,
+      tagCounts: [...tagCounts.entries()].sort((a, b) => b[1] - a[1]),
+      rows,
+    });
+  }
+  sections.sort((a, b) => (a.mean ?? 99) - (b.mean ?? 99));
+  return { bundle, cohort: SLOTS.length, sections };
+}
+
+/** Every stored record, newest handout schema, one object per graded section. */
+export async function exportRecords(bundle: Bundle): Promise<Record_[]> {
+  const files = await listStudentFiles(bundle.handout_id);
+  return files.flatMap((f) => Object.values(f.records)).sort(
+    (a, b) => a.section_index - b.section_index || a.student_hash.localeCompare(b.student_hash)
+  );
+}
+
+export interface Pair {
+  handout_id: string;
+  section_id: string;
+  prompt: string;
+  chosen: string;
+  rejected: string;
+  chosen_meta: { version_id: string; content_sha: string; prompt_template: string; grade_centred: number };
+  rejected_meta: { version_id: string; content_sha: string; prompt_template: string; grade_centred: number };
+}
+
+/**
+ * Preference pairs, derived rather than observed.
+ *
+ * Six students grade six versions of a section once each, so a section yields
+ * up to C(6,2) = 15 orderable pairs. They compare ACROSS students, which is
+ * the cost of dropping the pairwise probe, so each rater's own mean is
+ * subtracted before ordering — the standard correction, and reasonable with
+ * six calibrated readers. Ties are dropped rather than broken arbitrarily.
+ *
+ * A record whose content_sha no longer matches the bundle is skipped: the
+ * instructor has edited that version since it was graded, and pairing an old
+ * grade with new prose is exactly the corruption the hash exists to catch.
+ */
+export async function exportPairs(bundle: Bundle): Promise<{ pairs: Pair[]; stale: number; ties: number }> {
+  const files = await listStudentFiles(bundle.handout_id);
+  const bySection = new Map<string, { r: Record_; centred: number }[]>();
+  let stale = 0;
+  let ties = 0;
+
+  for (const f of files) {
+    const graded = Object.values(f.records).filter((r) => r.grade !== null);
+    if (!graded.length) continue;
+    // Centred within this handout: it is the unit the instructor exports, and
+    // a rater's mean over one handout is what their grades on it are relative to.
+    const mean = graded.reduce((a, r) => a + (r.grade as number), 0) / graded.length;
+    for (const r of graded) {
+      const section = bundle.sections.find((s) => s.section_id === r.section_id);
+      const body = section?.bodies[r.version_id];
+      if (!body || body.content_sha !== r.content_sha) {
+        stale++;
+        continue;
+      }
+      const list = bySection.get(r.section_id) ?? [];
+      list.push({ r, centred: (r.grade as number) - mean });
+      bySection.set(r.section_id, list);
+    }
+  }
+
+  const pairs: Pair[] = [];
+  for (const [sectionId, list] of bySection) {
+    const section = bundle.sections.find((s) => s.section_id === sectionId)!;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const diff = list[i].centred - list[j].centred;
+        if (Math.abs(diff) < 1e-9) {
+          ties++;
+          continue;
+        }
+        const [hi, lo] = diff > 0 ? [list[i], list[j]] : [list[j], list[i]];
+        // Two records of the same version tell us about two readers, not two
+        // approaches. Nothing to learn and it would be over-counted.
+        if (hi.r.version_id === lo.r.version_id) continue;
+        const meta = (x: typeof hi) => ({
+          version_id: x.r.version_id,
+          content_sha: x.r.content_sha,
+          prompt_template: x.r.generation.prompt_template,
+          grade_centred: Number(x.centred.toFixed(4)),
+        });
+        pairs.push({
+          handout_id: bundle.handout_id,
+          section_id: sectionId,
+          // Both sides carry the same objective by construction — the bundler
+          // refuses a section whose versions disagree about it.
+          prompt: section.learning_objective,
+          chosen: section.bodies[hi.r.version_id].markdown,
+          rejected: section.bodies[lo.r.version_id].markdown,
+          chosen_meta: meta(hi),
+          rejected_meta: meta(lo),
+        });
+      }
+    }
+  }
+  return { pairs, stale, ties };
+}

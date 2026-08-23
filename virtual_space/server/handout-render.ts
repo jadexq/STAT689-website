@@ -15,7 +15,7 @@ import { Marked, type TokenizerAndRendererExtension } from "marked";
 import { BASE_CSS, escapeHtml, wrapTables } from "./render";
 import type { Bundle, Section } from "./handout-format";
 import type { Record_ } from "./handouts";
-import { TAGS } from "./handouts";
+import { TAGS, type HandoutSummary } from "./handouts";
 
 // throwOnError:false renders a malformed expression in red instead of taking
 // the whole page down. One typo in one formula must not blank a handout the
@@ -326,6 +326,102 @@ ${parts.join("\n")}
 how the next one gets written.</div>
 </main>
 ${o.scripts ?? ""}
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// The instructor's view
+// ---------------------------------------------------------------------------
+
+const DASH_CSS = `
+.dash-sec { border: 1px solid #2a3145; border-radius: 12px; padding: 16px 18px; margin: 0 0 18px; background: #141828; }
+.dash-sec h3 { margin: 0 0 6px; font-size: 17px; }
+.dash-sec .obj { font-size: 13px; color: #8b96b3; font-style: italic; margin: 0 0 12px; }
+.dash-sec .rate { font-size: 12.5px; color: #8b96b3; margin: 0 0 12px; }
+.dash-sec .rate b { color: #dfe6f5; }
+.score { display: inline-block; min-width: 26px; text-align: center; border-radius: 7px; padding: 2px 7px; font-weight: 700; font-size: 13px; }
+.s1, .s2 { background: #4a1f27; color: #ffb3c0; }
+.s3 { background: #4a3f1f; color: #f0d9a0; }
+.s4, .s5 { background: #1f4a30; color: #a8e8bf; }
+.s0 { background: #262c40; color: #8b96b3; font-weight: 400; }
+.vrow { border-top: 1px solid #232a3d; padding: 10px 0 2px; font-size: 13.5px; }
+.vrow:first-of-type { border-top: 0; }
+.vrow .vid { font-weight: 700; margin: 0 8px; }
+.vrow .app { color: #8b96b3; font-size: 12.5px; }
+.vrow .who { color: #4f5871; font-size: 11.5px; float: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.vrow .stale { color: #ffb454; font-size: 11.5px; margin-left: 6px; }
+.vrow .tg { display: inline-block; font-size: 11.5px; background: #3a2b2b; border: 1px solid #8a4b4b; color: #f0c9c9; border-radius: 999px; padding: 1px 8px; margin: 6px 4px 0 0; }
+.vrow blockquote { margin: 7px 0 2px; border-left: 3px solid #4a3f77; padding: 0 0 0 12px; color: #dfe6f5; font-size: 14px; }
+.tagsum { font-size: 12.5px; color: #8b96b3; margin: 12px 0 0; border-top: 1px solid #232a3d; padding-top: 10px; }
+.tagsum b { color: #ffb3c0; }
+.exports { font-size: 13px; margin: 0 0 26px; }
+.exports a { margin-right: 14px; }
+.silent { color: #6f7a96; font-style: italic; font-size: 13px; }
+`;
+
+function gradeChip(g: number | null): string {
+  return g === null ? `<span class="score s0">—</span>` : `<span class="score s${g}">${g}</span>`;
+}
+
+export function renderDashboard(sum: HandoutSummary): string {
+  const b = sum.bundle;
+  const body = sum.sections
+    .map((s) => {
+      const rows = s.rows.length
+        ? s.rows
+            .map(
+              (r) =>
+                `<div class="vrow">${gradeChip(r.grade)}<span class="vid">${escapeHtml(r.version_id)}</span>` +
+                `<span class="app">${escapeHtml(r.approach)} · ${escapeHtml(r.prompt_template)}</span>` +
+                (r.current ? "" : `<span class="stale">⚠ edited since graded</span>`) +
+                `<span class="who">${escapeHtml(r.who)}</span>` +
+                (r.tags.length ? `<div>${r.tags.map((t) => `<span class="tg">${escapeHtml(t)}</span>`).join("")}</div>` : "") +
+                (r.comment ? `<blockquote>${escapeHtml(r.comment)}</blockquote>` : "") +
+                `</div>`
+            )
+            .join("")
+        : `<div class="silent">Nobody has answered this one yet.</div>`;
+      const tags = s.tagCounts.length
+        ? `<div class="tagsum">${s.tagCounts.map(([t, n]) => `<b>${escapeHtml(t)}</b> ×${n}`).join(" · ")}</div>`
+        : "";
+      return `<div class="dash-sec">
+<h3>${escapeHtml(s.title)} ${gradeChip(s.mean === null ? null : Math.round(s.mean))}</h3>
+<div class="obj">${escapeHtml(s.learning_objective)}</div>
+<div class="rate"><b>${s.responded}</b> of ${sum.cohort} answered${
+        s.mean === null ? "" : ` · mean ${s.mean.toFixed(2)}`
+      }</div>
+${rows}${tags}</div>`;
+    })
+    .join("\n");
+
+  const id = encodeURIComponent(b.handout_id);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(b.title)} — feedback</title>
+<style>${BASE_CSS}${HANDOUT_CSS}${DASH_CSS}</style>
+</head>
+<body>
+<main>
+<div class="crumb"><a href="/">&larr; Back to the campus</a> · 📊 Handout feedback</div>
+<h1>${escapeHtml(b.title)}</h1>
+<div class="hmeta">
+  <span class="chip">${escapeHtml(b.chapter)}</span>
+  <span class="chip">${escapeHtml(b.term)}</span>
+  ${b.sections.length} sections × ${b.versions.length} versions
+</div>
+<p class="exports">
+  <a href="/handout/${id}">preview the handout</a>
+  <a href="/admin/handouts/${id}?format=jsonl">records (.jsonl)</a>
+  <a href="/admin/handouts/${id}?format=jsonl&amp;pairs=1">derived pairs (.jsonl)</a>
+</p>
+${body}
+<div class="hfoot">Worst first. Every cell holds one judgement, so no single grade is a
+measurement — the comments are the evidence and the grades are the index into them.</div>
+</main>
 </body>
 </html>`;
 }
