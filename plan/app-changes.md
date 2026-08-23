@@ -35,7 +35,7 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · The instructor is always the TA, never a student
 
-**Status:** planned — reviewed and approved 2026-08-22, not yet implemented
+**Status:** **shipped 2026-08-22** — `dc57bf8`, verified locally, not yet deployed
 **Origin:** noticed by the instructor during Phase C browser verification
 
 ### The decision
@@ -103,7 +103,7 @@ joins as `jade@local` expecting an avatar breaks:
 | `scripts/ghost-test.ts` | 12, 25 | joins `{name:"Jade"}` → default `jade@local` → no avatar, and the suite is *entirely* about avatar replacement | join as a non-admin dev identity |
 | `scripts/smoke.ts` | 42 | student leg is `jade@local` | non-admin dev identity |
 | `scripts/integration.ts` | 52 | student leg is `jade@local` | non-admin dev identity |
-| `scripts/multiuser.ts` | 64-66 | the `role` argument to `join()` becomes meaningless | keep the signature so the impostor case still reads as a claim being refused; drop the pass-through |
+| `scripts/multiuser.ts` | — | **no change needed.** The plan said to drop the `role` pass-through; keeping it is strictly better. The impostor still *sends* `role: "admin"` and the suite asserts the server ignores it — which tests more after this change than before | none |
 
 The admin legs (`smoke.ts:98`, `integration.ts:67`, `multiuser.ts:123`) keep passing — sending
 `role: "admin"` becomes a no-op rather than an error.
@@ -120,17 +120,31 @@ The admin legs (`smoke.ts:98`, `integration.ts:67`, `multiuser.ts:123`) keep pas
    `space:<email>` (`MainRoom.ts:195`). Any TA history built on the instructor account while in
    student mode will not follow into admin mode.
 
-### Verification
+### Verification — done 2026-08-22
 
-Local only. No redeploy, so no Artifact Registry cost.
+`npx tsc --noEmit` clean, and no references to the removed concept remain.
 
-- `npx tsc --noEmit`
-- the four suites against a freshly started server
+| Suite | Result | Reading |
+|---|---|---|
+| `smoke` | **passed** | includes board compose → preview → pin to the Library |
+| `integration` | **passed** | forced skills, speak-as-Terra, sealed classroom |
+| `multiuser` | failed | `TIMEOUT waiting for: Terra answered Ana` — A2, identical to baseline, and it ran third |
+| `ghost-test` | failed | `expected 12 entities, got 9` — A1, the stale hardcoded count. **The behaviour it exists to test passed**: `Ana avatars: 1`, so the rejoin did replace the stale avatar |
 
-**The baseline is already red**, which matters for reading the result: `open-issues.md` A1
-(`ghost-test` stale count) and A2 (`multiuser` order dependence) fail today. The bar is
-"fails the same way as before", not "green". A1 and A2 are deliberately **not** fixed as part
-of this — fixing tests inside a behaviour change is how you lose track of what broke what.
+The bar was "fails the same way as before", not "green" — A1 and A2 were red before this change
+and were deliberately not fixed inside it.
+
+**Behaviour verified directly**, rather than inferred from the suites, by joining four ways:
+
+| Join | role | avatar |
+|---|---|---|
+| bare, default identity (on the allowlist) | `admin` | none |
+| **allowlisted account explicitly asking for `role: "student"`** | **`admin`** | **none** |
+| ordinary student | `student` | yes |
+| non-allowlisted account demanding `role: "admin"` | `student` | yes |
+
+The second row is the important one: the rule is *enforced*, not merely unoffered. The fourth
+confirms the pre-existing safety property survived — asking for admin still gets you nothing.
 
 ### Not in scope
 
@@ -146,5 +160,10 @@ still in place, since an old client sending `role` is simply ignored again.
 
 `open-issues.md` E1 records that the TA could not post to the Library board. The likely
 explanation is that the instructor was in student mode, where the admin panel is not rendered
-and `MainRoom.ts:370` refuses admin actions. **This is a hypothesis, not a finding** — it is
-cheap to settle by trying a board post from admin mode before anyone debugs code.
+and `MainRoom.ts:370` refuses admin actions.
+
+**Evidence added 2026-08-22:** the `smoke` suite's step 6 — compose, preview, pin to the
+Library, then a student walks in and sees the post — **passes**. So the board path works from
+admin mode. That is strong support, but it is not yet proof for E1: smoke runs locally against
+the dev identity, and the instructor's report was against the deployed service. Settle it by
+posting from admin mode in the cloud.
