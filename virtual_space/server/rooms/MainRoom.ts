@@ -604,6 +604,16 @@ export class MainRoom extends Room {
 
   // ---------- admin actions ----------
 
+  // Who a board post is signed by. Not the TA: the instructor types every
+  // post themselves, and a due date carries the instructor's authority, not
+  // an LLM's. Students have to be able to tell the two apart — that becomes
+  // load-bearing the first time the TA is confidently wrong about something.
+  private instructorSig(client: Client): string {
+    const id = this.identities.get(client.sessionId);
+    return `${id?.name || "The instructor"} · Instructor`;
+  }
+
+
   private async handleAdmin(client: Client, msg: any) {
     if (!this.admins.has(client.sessionId)) {
       return client.send("adminAck", { ok: false, note: "Admin only — this account is not on the instructor list." });
@@ -649,7 +659,7 @@ export class MainRoom extends Room {
       if (!target || !text) {
         return client.send("adminAck", { ok: false, note: "Pick a board and keep some text." });
       }
-      const item = postToBoard(target.id, this.ta().name, text);
+      const item = postToBoard(target.id, this.instructorSig(client), text);
       logEvent("board_post", { feed: target.id, by: item.by, text: item.text });
       this.sendFeedToViewers(target.id);
       if (target.id === ANNOUNCEMENTS) {
@@ -663,7 +673,9 @@ export class MainRoom extends Room {
           from: this.ta().name,
           id: TA_ID,
           kind: "agent",
-          text: `(pins a note to the ${target.label} board)`,
+          // The TA is the only body in the room to narrate this, but the note
+          // is the instructor's — say whose it is rather than implying it.
+          text: `(pins a note from the instructor to the ${target.label} board)`,
         });
         client.send("adminAck", { ok: true, note: `Posted to the ${target.label} board.` });
       }
