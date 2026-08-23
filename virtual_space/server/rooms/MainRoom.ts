@@ -71,6 +71,17 @@ const MAX_STUDENT_REPLIES = 2; // per human message — the TA is exempt
 // dropped socket is routine, not a departure. Hold the seat — and the
 // avatar, exactly where it was standing — for this long before cleaning up.
 const RECONNECT_WINDOW_S = 120;
+// A student who stops talking is sent back to their office, freeing the TA
+// for whoever is waiting. Without this the door above is a lockout bug: a
+// closed laptop lid holds the only way in indefinitely. Warn first, so
+// nobody is teleported mid-thought — typing anything resets the clock.
+//
+// Distinct from the CLIENT's 15-minute idle park (main.ts IDLE_MS), which
+// closes the socket to stop burning a Cloud Run connection. This one is
+// about fairness inside one room, so it is much shorter.
+const SOLO_WARN_MS = Number(process.env.SOLO_WARN_S || 4 * 60) * 1000;
+const SOLO_IDLE_MS = Number(process.env.SOLO_IDLE_S || 5 * 60) * 1000;
+const SOLO_SWEEP_MS = 5_000;
 const TA_OFFLINE_MSG =
   "(my TA brain isn't reachable — is the Virtual TA server running? `npm run dev` in virtual_ta)";
 
@@ -85,6 +96,7 @@ export class MainRoom extends Room {
   private lastRoom = new Map<string, string | null>(); // client -> room of their focus entity
   private soloRooms = ROOMS.filter((r) => r.soloOccupancy);
   private lastShut = ""; // last broadcast door state, to avoid re-sending it
+  private soloIdle = new Map<string, { last: number; warned: boolean }>();
 
   onCreate() {
     this.autoDispose = false;
@@ -109,6 +121,8 @@ export class MainRoom extends Room {
     this.onMessage("chat", (client, msg) => this.handleChat(client, msg));
     this.onMessage("admin", (client, msg) => this.handleAdmin(client, msg));
     this.onMessage("mic", (client, msg) => this.handleMic(client, msg));
+
+    this.clock.setInterval(() => this.sweepSoloRooms(), SOLO_SWEEP_MS);
 
     logEvent("server_start", { agents: this.agents.map((a) => a.name) });
   }
@@ -314,6 +328,41 @@ export class MainRoom extends Room {
     return this.clients.find((c) => c.sessionId === entityId);
   }
 
+  // Send an idle occupant home so the next student can get in.
+  private sweepSoloRooms() {
+    const now = Date.now();
+    const occupants = new Set<string>();
+    for (const r of this.soloRooms) {
+      const occ = this.occupantOf(r.id);
+      if (!occ) continue;
+      occupants.add(occ.id);
+      // First sight of them in here starts the clock — walking in counts as
+      // activity, so nobody is warned the instant they arrive.
+      const st = this.soloIdle.get(occ.id) ?? { last: now, warned: false };
+      this.soloIdle.set(occ.id, st);
+      const idle = now - st.last;
+      const c = this.clientOf(occ.id);
+      if (idle >= SOLO_IDLE_MS) {
+        this.soloIdle.delete(occ.id);
+        const home = roomById("office-jade")!;
+        const path = findPath({ x: occ.x, y: occ.y }, home.spawn);
+        if (c) this.notice(c, `You have been quiet for a while, so the ${r.label} is being freed for the next student. Walk back in any time.`);
+        logEvent("solo_vacated", { who: occ.name, room: r.id, reason: "idle" });
+        if (path && path.length) this.walk(occ, path, 130);
+        else {
+          occ.x = home.spawn.x;
+          occ.y = home.spawn.y;
+          this.broadcastWorld();
+        }
+      } else if (idle >= SOLO_WARN_MS && !st.warned) {
+        st.warned = true;
+        const left = Math.max(1, Math.round((SOLO_IDLE_MS - idle) / 1000));
+        if (c) this.notice(c, `Still there? Say something in the next ${left}s or the ${r.label} will be freed for the next student.`);
+      }
+    }
+    for (const id of [...this.soloIdle.keys()]) if (!occupants.has(id)) this.soloIdle.delete(id);
+  }
+
   // The one place the "TA never moves" rule is enforced. Both movement
   // handlers and the admin's "walk there" go through here, so a future
   // caller that forgets is a compile-time miss, not a silent hole.
@@ -376,6 +425,10 @@ export class MainRoom extends Room {
     const p = this.players.get(client.sessionId);
     if (!p) return;
     const rid = roomAt(p.x, p.y) || "commons";
+    // Speaking is what counts as being present — not moving. Someone
+    // reading a long answer is idle by the mouse's measure but not by the
+    // one that matters, which is why the warning comes first.
+    this.soloIdle.set(client.sessionId, { last: Date.now(), warned: false });
     this.pushHistory(rid, { name: p.name, text });
     this.deliverToRoom(rid, { from: p.name, id: p.id, kind: "human", text });
     logEvent("chat", { who: p.name, room: rid, text });
