@@ -1,10 +1,17 @@
 # STAT 689 — Google Cloud deployment plan
 
 **Status:** approved 2026-08-20 · **Phase A built and verified** · **Phase B complete
-2026-08-22** · Phase C not started
+2026-08-22** · **Phase C deployed and verified 2026-08-22**
+
+> **Status lives in [`open-issues.md`](./open-issues.md), not here.** This line is a coarse
+> marker only. It read "Phase C not started" for several hours *after* Phase C was deployed —
+> the same drift that D3 and D4 record. Do not restate per-item status in this file.
+
 **Written:** 2026-08-20 · **Author:** Claude, for Jade Wang
 **Scope of this doc:** deploy the virtual space + virtual TA to Google Cloud so ~5 students
 can log in with their Google accounts.
+**Not in this doc:** application design decisions — those live in
+[`app-changes.md`](./app-changes.md).
 
 > **This file is tracked in git.** It was moved out of the gitignored `user_requirements/`
 > on 2026-08-22 so that the deployment findings have a backup — they are not recorded

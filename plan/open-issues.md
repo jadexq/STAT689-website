@@ -2,7 +2,8 @@
 
 **Companion to [`gcp-deployment-plan.md`](./gcp-deployment-plan.md).** That file explains *why*
 decisions were made and is written as a narrative. This one tracks *what is still outstanding*
-and is meant to be skimmed and ticked off.
+and is meant to be skimmed and ticked off. Deliberate changes to the app — as opposed to
+things that are broken — are planned in [`app-changes.md`](./app-changes.md).
 
 **The split exists for a reason.** Status buried in a 1,100-line narrative goes stale: on
 2026-08-22 two sections had to be corrected because §14g still read "NOT yet applied" for work
