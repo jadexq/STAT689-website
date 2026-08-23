@@ -23,6 +23,22 @@ import { readQuestions, recordQuestion, writeDigest } from "../logger.ts";
 import type { Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
 
+// How an answer should be written. Shared by both prompts below rather than
+// pasted twice: they had already been edited apart once, and a house style
+// that differs depending on which retrieval path ran is not a house style.
+//
+// The maths line is E9. Left to itself the model writes `\[ … \]` and
+// `\(…\)`, and the student sees the backslashes — the chat bubble renders no
+// maths at all, and even once it does, `render.ts` implements `$…$`. Asking
+// for `$…$` makes the TA speak the dialect the rest of the app already reads,
+// so the answer is right wherever it is later displayed rather than only in
+// the one place that has not been written yet. It does NOT make chat render
+// maths today — that is the other half of E9, and this is the half that costs
+// nothing. A prompt is a request, not a guarantee.
+const CHAT_STYLE = `- Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
+- Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
+- Keep any maths inline and between single dollar signs, like $\\sqrt{d_k}$ — never \\( … \\), and never a display equation on its own line with \\[ … \\] or $$ … $$. A chat bubble has no room to centre a formula. Prefer plain words where they are just as clear: "divided by the square root of d_k" reads better than the symbols do.`;
+
 // Everything the TA needs to answer a logistics question: the announcements
 // the instructor has pinned, and the schedule.
 //
@@ -121,8 +137,7 @@ Rules:
 - Name the document each part of your answer came from, so the student can go and read it.
 - The passages are excerpts, not whole documents. If they do not actually answer the question, say so, then answer from general knowledge and label that clearly as outside the course material.
 - Never present general knowledge as something a course document says.
-- Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
-- Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
+${CHAT_STYLE}
 
 RETRIEVED PASSAGES:
 ${passageBlock(passages)}`;
@@ -183,8 +198,7 @@ Rules:
       ? ""
       : "\n- These are the sections of a long document that matched the question, not the whole of it. If the answer is not here, say it was not in the sections you were given rather than that the document does not cover it."
   }
-- Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
-- Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
+${CHAT_STYLE}
 
 ${whole ? `THE DOCUMENT — "${loaded.reading.title}":` : `PASSAGES FROM "${loaded.reading.title}":`}
 ---

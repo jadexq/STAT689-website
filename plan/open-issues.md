@@ -694,59 +694,45 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   the character's placeholder shows".
 
 ### E9. The TA writes maths in a dialect nothing renders, on the surface students use most
-- [ ] **Open. Found 2026-08-23 running Stage 7 check 8 against the deployed service.**
-- Asked a question whose answer is a formula, the TA replied with
-  `\[ \tau = \sqrt{d_k}, \]` and `\(\text{Attention}(Q,K,V)=\ldots\)`. The student sees those
-  backslashes and braces literally. The answer was *correct* and correctly cited — it is only
-  unreadable.
+- [ ] **Half fixed 2026-08-23 in the same day it was found. The output dialect is now correct and
+  guaranteed; the chat pane still cannot render maths, so a student still sees the markup.**
+- Found running Stage 7 check 8 against the deployed service. Asked a question whose answer is a
+  formula, the TA replied with `\[ \tau = \sqrt{d_k}, \]` and `\(\text{Attention}(Q,K,V)=\ldots\)`.
+  The answer was *correct* and correctly cited — it is only unreadable.
 - **Two independent faults, and fixing either alone leaves it broken:**
   1. The space chat pane renders no maths at all. `render.ts` is server-side, for whole pages;
-     the chat bubble is client-side and has never linked KaTeX.
-  2. Nothing tells the model which delimiters to use, and left alone it reaches for
-     `\[…\]` / `\(…\)`. The renderer in `render.ts` implements `$…$` / `$$…$$` and would not
-     match these even if the chat pane called it.
+     the chat bubble is client-side (`renderRich`, `main.ts:586`) and has never linked KaTeX.
+  2. Nothing told the model which delimiters to use, and left alone it reaches for
+     `\[…\]` / `\(…\)`. **Fixed.** See below.
+- **What (2) took, and why the first attempt was not enough.** This issue used to say the
+  cheapest honest fix was the prompt alone. That was wrong, and testing it is what showed it.
+  Asking the coach prompt for `$…$` fixed *inline* maths on the first try and left display
+  equations arriving as `\[ … \]` **every single time** — reproducible on demand by adding
+  "show me the formula" to any question. Tightening the wording to ban display equations
+  outright did not move it either. A prompt is a request, and this one was being refused.
+  - The guarantee is `normaliseMaths` in `llm.ts`, applied to every reply on the way out of
+    `chatLLM`: `\[ … \]` → `$$…$$`, `\( … \)` → `$…$`. Code spans and fenced blocks are
+    skipped, where `\[` is far more likely to be Python indexing than maths. `jsonLLM` calls the
+    raw path deliberately — rewriting delimiters inside a JSON string value is corruption.
+  - Three consecutive live runs against `gpt-oss:120b` came back clean afterwards.
+  - The prompt change stayed. It is what makes inline maths *inline* rather than a centred
+    equation in a chat bubble, which normalisation cannot decide.
+- **Why (2) matters even though the chat pane still shows raw markup.** TA replies are also
+  written into reading digests, and those are markdown that `render.ts` renders for real. `$$…$$`
+  sets an equation there; `\[ … \]` shows four literal backslashes. The dialect is now uniform
+  across every surface, so the two halves cannot drift further apart while (1) waits.
+- **What (1) would cost, for whoever picks it up.** KaTeX in the client bundle is ~280 KB against
+  a bundle already ~1.2 MB. The project's stated rule is that a student who never opens a reading
+  should not pay for a markdown parser — but in a course *about attention*, every student will
+  ask the TA something whose answer is a formula, so this is the case where paying is defensible.
+  The fonts and CSS are already served at `/katex`. Alternatively render the maths server-side
+  before the message leaves the space, which is cheaper for the client but breaks the
+  escape-first rule `renderRich` deliberately holds — that comment is worth reading before
+  choosing.
 - **Why this matters more than [E3](#e3), which it otherwise resembles.** E3 is bullet markers in
   prose — untidy. This is a course *about attention and transformers*: "what is the scaling
-  factor" is a question the TA will be asked in week one, and the answer is a formula every time.
-  E3's mitigation (ask the coach prompt for conversational prose) does not apply, because there is
-  no prose form of an equation.
+  factor" is a week-one question, and the answer is a formula every time.
 - Not caught earlier because check 4 was written as "open a handout/reading and confirm the maths
   renders". Both of those surfaces pass. The TA's *own* output was never on the list — the checks
   covered the pages the instructor writes and not the text the model generates.
-- **Cheapest honest fix is (2) alone:** tell the coach prompt to write maths in `$…$`, which makes
-  the output match the dialect the rest of the app already speaks. It still shows raw in chat
-  until (1) lands, but it then renders correctly everywhere the text is later displayed, and it
-  stops the two halves drifting further apart.
 - **Resolved when:** a formula asked of the TA in the space chat is readable to a student.
-
----
-
-## Resolved
-
-Kept in place above with a `[x]` and a dated note, rather than moved here — a record of what
-turned out to be a non-issue is worth as much as the open list.
-
-**2026-08-22, Phase C deploy:** B1 (real Google token satisfies `IAP_JWT_AUDIENCE`),
-B5 (`--no-allow-unauthenticated` + `--iap`), D1 (least-privilege runtime account, with the
-`objectUser` overwrite actually exercised). D3 was resolved earlier the same day.
-
-**2026-08-22, browser verification:** B4 (redirect URI) closed by a real sign-in on both
-accounts. The admin/student split was confirmed for real — `jadexqwang@gmail.com` gets the
-admin panel, `jadewang@tamu.edu` interacts with the TA and does not (see D5). D6 (CPU
-throttling) closed the same day.
-
-Still open: **B2** and **B3** (both resolve by accident during a class), **D7** (bucket wipe,
-time-limited — see the note there), **A1**/**A2** (pre-existing test failures), **D2**/**D2b**
-(allowances), **D4** (plan consolidation), **D5** (four student addresses), and new from using
-the deployed app: **E1** (TA cannot post to the Library board).
-
-**2026-08-23, step 4 (feedback handouts):** three new entries, all prerequisites rather than
-defects — **D8** (`HANDOUT_SALT` unset), **D9** (IRB), **E7** (no way to withdraw a handout).
-**D5b** gained a consequence: without a `STUDENTS` slot a student is now refused handouts
-outright rather than merely spawning in the wrong room.
-
-**2026-08-23, later the same day:** **D9 closed by decision** — the instructor is not handling
-IRB now; it reopens only if publication is considered, and the note there says exactly what would
-trigger that. **D8** lost its dangerous half: a `.salt-fingerprint` beside the responses turns a
-changed salt from a silent orphaning into a 503 that names the fix. What remains of D8 is one
-`openssl rand -hex 24` at deploy time.
