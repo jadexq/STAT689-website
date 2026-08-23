@@ -51,7 +51,8 @@ export function isPinned(r: Reading): boolean {
   return Boolean(r.pinned || r.agenda);
 }
 
-// Where the corpus lives — TWO roots, each with its own manifest.json.
+// Where the corpus lives — THREE roots, each with its own manifest.json and
+// exactly one writer.
 //
 //   UPLOAD_DIR  DATA_DIR/materials. Written by the instructor at run time and
 //               restored from the bucket at boot, so adding a reading is a
@@ -59,18 +60,24 @@ export function isPinned(r: Reading): boolean {
 //               also where the real course documents belong: materials/ is
 //               tracked, this repo is private only for now, and git history
 //               outlives that decision.
+//   REPO_DIR    DATA_DIR/repos. Written by repo.ts, which caches the class
+//               project's README so the TA can answer from it. Its own root
+//               rather than a corner of UPLOAD_DIR because saveUpload()
+//               rewrites that manifest wholesale — two writers sharing it
+//               would clobber each other.
 //   SHIPPED_DIR the repo's own materials/, or MATERIALS_DIR if set — which
 //               REPLACES the shipped fixture rather than adding to it, and is
 //               how the real corpus is pointed at locally.
 //
 // Uploads are searched first, so re-uploading an id corrects a shipped
-// reading without a deploy. A manifest entry can only name a file inside its
-// own root.
+// reading — or a fetched README — without a deploy. A manifest entry can
+// only name a file inside its own root.
 const SHIPPED_DIR = process.env.MATERIALS_DIR?.trim()
   ? path.resolve(process.env.MATERIALS_DIR.trim())
   : path.join(import.meta.dirname, "..", "materials");
 const UPLOAD_DIR = path.join(DATA_DIR, "materials");
-const ROOTS = [UPLOAD_DIR, SHIPPED_DIR];
+export const REPO_DIR = path.join(DATA_DIR, "repos");
+const ROOTS = [UPLOAD_DIR, REPO_DIR, SHIPPED_DIR];
 const MAX_READING_CHARS = 28_000;
 
 async function manifestAt(root: string): Promise<Reading[]> {
@@ -164,9 +171,34 @@ export async function readingFile(
   return { reading, bytes, format: formatOf(reading) };
 }
 
+// A document this small cannot answer a question on its own, so it must not
+// capture the conversation. coach.ts hands a matched reading over whole and
+// then STAYS on it, so matching a stub costs the student not just this answer
+// but every later one in the session — the sticky-readingId failure 2f fixed
+// for truncation, arriving by a second route. Introduced by 3b: a repo whose
+// README is still one heading long is a real, listed, near-empty reading, and
+// "how do I contribute to the project?" lands on it squarely.
+//
+// Measured on the file rather than the extracted text, so a PDF is not parsed
+// just to be rejected. Generous for a PDF, which is the right direction: the
+// floor is meant to catch stubs, not to second-guess real documents.
+const MIN_MATCH_BYTES = 1_000;
+
+async function tooSmallToName(r: Reading): Promise<boolean> {
+  const p = filePathOf(r);
+  if (!p) return true;
+  const s = await stat(p).catch(() => null);
+  return !s || s.size < MIN_MATCH_BYTES;
+}
+
 // Match a reading the student named in free text, by title words, id, or link.
+// Stubs are excluded, not because they are irrelevant but because retrieval
+// handles them better: their one chunk is still in the index, so a genuinely
+// matching line comes back as a passage instead of as the whole session.
 export async function matchReading(message: string): Promise<Reading | null> {
-  const readings = (await listReadings()).filter((r) => !isPinned(r));
+  const all = (await listReadings()).filter((r) => !isPinned(r));
+  const small = await Promise.all(all.map(tooSmallToName));
+  const readings = all.filter((_r, i) => !small[i]);
   const lower = message.toLowerCase();
   for (const r of readings) {
     if (lower.includes(r.id.toLowerCase()) || lower.includes(r.title.toLowerCase())) return r;

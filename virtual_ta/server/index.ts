@@ -10,6 +10,7 @@ import path from "node:path";
 import { llmInfo } from "./llm.ts";
 import { formatOf, listReadings, readingFile, saveUpload } from "./materials.ts";
 import { loadAgenda } from "./agenda.ts";
+import { startRepoSync } from "./repo.ts";
 import { OUTPUT_DIR } from "./paths.ts";
 import { appendClassTranscriptLine, initStorage, logTurn } from "./logger.ts";
 import {
@@ -187,4 +188,7 @@ await initStorage();
 app.listen(PORT, "127.0.0.1", () => {
   const { provider, model } = llmInfo();
   console.log(`Virtual TA up — http://localhost:${PORT} (LLM: ${provider}/${model})`);
+  // Deliberately after listen() and deliberately unawaited: the class server
+  // must boot whether or not GitHub answers. See repo.ts.
+  startRepoSync();
 });

@@ -38,7 +38,15 @@ async function main() {
   }
 
   console.log("\n2. A question about the corpus finds passages");
-  const first = searchable[0];
+  // The document with the most text, not searchable[0]. Since 3b the first
+  // root entry can be the fetched project README, which on a repo whose
+  // README is still one heading long is a document with nothing in it to
+  // find. Ranking is tested against whatever actually has prose.
+  const lengths = await Promise.all(
+    searchable.map(async (r) => ({ r, len: (await loadReading(r.id))?.text.length ?? 0 }))
+  );
+  lengths.sort((a, b) => b.len - a.len);
+  const first = lengths[0].r;
   // Query built from the document's own title, so this holds whatever the
   // instructor has actually put in the corpus.
   const hits = await searchMaterials(first.title);
@@ -80,11 +88,7 @@ async function main() {
 
   // ---- long documents (2f) ----
   console.log("\n8. A long document is retrieved within, not truncated");
-  const long = (
-    await Promise.all(
-      searchable.map(async (r) => ({ r, len: (await loadReading(r.id))?.text.length ?? 0 }))
-    )
-  ).sort((a, b) => b.len - a.len)[0];
+  const long = lengths[0];
   const full = await loadReading(long.r.id);
   if (!full?.truncated) {
     console.log(`  ! longest document is ${long.len} chars, under the cap — not exercised here`);
@@ -154,7 +158,47 @@ async function main() {
     );
   }
 
-  console.log("\n11. Formats");
+  // ---- the project README (3b) ----
+  console.log("\n11. The project repository's README");
+  const readme = readings.find((r) => r.id === "project-readme");
+  if (!readme) {
+    // A legitimate state, not a failure: no network on this machine, or the
+    // repo has no README.md yet. repo.ts treats both as "one fewer reading".
+    console.log("  ! no cached README — GitHub unreachable, or the repo has none yet");
+  } else {
+    assert(!isPinned(readme), "the README is an ordinary reading, not pinned");
+    assert(readme.link?.includes("github.com"), `it links to ${readme.link}`);
+    const text = (await loadReading(readme.id))?.text ?? "";
+    assert(text.length > 0, `${text.length} chars cached on disk`);
+    // Being listed and being answerable-from are different claims, so count
+    // what it actually contributes to the index rather than assuming.
+    const parts = (await searchWithin(readme.id, readme.title, 10_000_000)).length;
+    if (!parts) {
+      // True as of 3b: the repo's README is a single heading with no body, so
+      // it contributes no chunks at all. The plumbing is right and the corpus
+      // is still effectively one searchable document. This turns itself off
+      // when the instructor writes the README.
+      console.log(`  ! "${readme.title}" has no indexable text yet — it is a heading and nothing else`);
+      console.log("  ! so cross-document ranking is STILL not exercised (open-issues E4)");
+    } else {
+      const others = searchable.filter((r) => r.id !== readme.id);
+      assert(others.length > 0 && parts > 0, `${parts} chunk(s), alongside ${others.length} other document(s)`);
+      const hits = await searchMaterials(first.title);
+      assert(
+        hits.length > 0 && hits[0].readingId === first.id,
+        "…and a title query still ranks its own document first"
+      );
+    }
+    // The stub floor in matchReading: a near-empty reading must not capture
+    // the session, because coach.ts stays on a matched reading. Only
+    // meaningful while the README IS a stub — hence the length guard.
+    if (text.length < 1_000) {
+      const named = await matchReading("how do I contribute to the class project?");
+      assert(named?.id !== readme.id, "a stub reading does not capture the conversation");
+    }
+  }
+
+  console.log("\n12. Formats");
   assert(
     stripHtml("<style>x{}</style><p>Hello <b>there</b></p><script>bad()</script>").trim() ===
       "Hello there",

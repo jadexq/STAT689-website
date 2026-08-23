@@ -286,6 +286,18 @@ async function main() {
   });
   assert(badType.status === 400, "…and the instructor uploading a .exe is refused too");
 
+  // ---- step 3: the project repositories ----
+  console.log("\n11. The Computer Lab's repo cards are config, not a pinned post");
+  const repos = (await (await fetch(`${http}/api/repos`)).json()) as {
+    repos: { name: string; description: string; url: string }[];
+  };
+  assert(repos.repos.length > 0, `${repos.repos.length} repository card(s)`);
+  assert(repos.repos.every((r) => /^https?:\/\//.test(r.url)), "…each with an absolute URL");
+  // The point of 3a: this survives a boards.json wipe, because it never went
+  // near boards.json. Nothing to assert about the wipe itself — the assertion
+  // is that this route reads a file the wipe does not touch.
+  assert(repos.repos.every((r) => r.name), "…and a name to put on the card");
+
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();
   await admin.leave();
