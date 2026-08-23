@@ -25,6 +25,11 @@ export interface Reading {
   title: string;
   file: string;
   link?: string;
+  // This reading is the course schedule: read as prose like any other, and
+  // additionally parsed as a table by agenda.ts. Marked in the manifest
+  // rather than found by filename, so a rename cannot silently turn the
+  // schedule off.
+  agenda?: boolean;
 }
 
 // Where the corpus lives. Defaults to the repo's own materials/ folder;

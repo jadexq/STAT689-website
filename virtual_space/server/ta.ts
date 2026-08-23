@@ -95,3 +95,20 @@ export async function taMaterialFile(
     type: res.headers.get("content-type") || "application/octet-stream",
   };
 }
+
+export interface TaAgendaRow {
+  date: string;
+  iso: string;
+  week: string;
+  lecture: string;
+  content: string;
+  homework: string;
+  topic: string;
+  planned: boolean;
+}
+
+export async function taAgenda(): Promise<{ rows: TaAgendaRow[]; problems: string[] }> {
+  const res = await fetch(`${TA_BASE}/api/agenda`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`TA agenda HTTP ${res.status}`);
+  return (await res.json()) as { rows: TaAgendaRow[]; problems: string[] };
+}

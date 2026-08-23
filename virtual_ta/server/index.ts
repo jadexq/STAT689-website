@@ -9,6 +9,7 @@ import compression from "compression";
 import path from "node:path";
 import { llmInfo } from "./llm.ts";
 import { formatOf, listReadings, readingFile } from "./materials.ts";
+import { loadAgenda } from "./agenda.ts";
 import { OUTPUT_DIR } from "./paths.ts";
 import { appendClassTranscriptLine, initStorage, logTurn } from "./logger.ts";
 import {
@@ -78,6 +79,18 @@ app.get("/api/materials/:id/file", async (req, res) => {
   }
   res.setHeader("content-type", MIME[found.format] ?? "application/octet-stream");
   res.send(found.bytes);
+});
+
+// The schedule, parsed. Same proxy path as the readings: the space serves it
+// to the browser, and the TA reads it straight from the corpus for its own
+// prompt (see coach.ts) rather than being told it over the wire.
+app.get("/api/agenda", async (_req, res) => {
+  const agenda = await loadAgenda();
+  if (!agenda) {
+    res.json({ rows: [], problems: [] });
+    return;
+  }
+  res.json(agenda);
 });
 
 app.post("/api/listen", async (req, res) => {

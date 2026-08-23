@@ -1,6 +1,12 @@
 {
   "readings": [
     {
+      "id": "agenda",
+      "title": "Course Agenda",
+      "file": "agenda.md",
+      "agenda": true
+    },
+    {
       "id": "attention-intro",
       "title": "A Gentle Introduction to Attention and Transformers",
       "file": "attention-intro.md",

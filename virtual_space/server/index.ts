@@ -12,7 +12,7 @@ import { MainRoom } from "./rooms/MainRoom";
 import { logFilePath } from "./logger";
 import { identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
-import { taMaterialFile, taMaterials } from "./ta";
+import { taAgenda, taMaterialFile, taMaterials } from "./ta";
 import { renderMarkdownPage } from "./render";
 
 const PORT = Number(process.env.PORT || 2567);
@@ -38,6 +38,15 @@ app.get("/api/materials", async (_req, res) => {
     // page: the TA brain being down must not take the campus with it.
     console.error(`[space] materials list: ${(err as Error).message}`);
     res.status(502).json({ readings: [], error: "The reading list is unavailable right now." });
+  }
+});
+
+app.get("/api/agenda", async (_req, res) => {
+  try {
+    res.json(await taAgenda());
+  } catch (err) {
+    console.error(`[space] agenda: ${(err as Error).message}`);
+    res.status(502).json({ rows: [], problems: [] });
   }
 });
 

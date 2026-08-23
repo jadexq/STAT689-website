@@ -587,11 +587,46 @@ function renderRich(text: string): string {
 // instructor adds mid-class appears on the next visit rather than the next
 // reload.
 type ShelfItem = { id: string; title: string; link?: string; format: string };
+type AgendaRow = { iso: string; content: string; homework: string; topic: string; planned: boolean };
+
+// The next couple of sessions, in the panel. The whole agenda is one click
+// away on the shelf; this is the part a student wants on the way past — what
+// is next and whether anything is due. A session with nothing written against
+// it shows as scheduled-but-unplanned rather than being hidden: the date is
+// real even when the content has not been decided yet.
+async function renderUpNext() {
+  const box = $<HTMLDivElement>("upnext");
+  let rows: AgendaRow[];
+  try {
+    rows = ((await (await fetch("/api/agenda")).json()) as { rows?: AgendaRow[] }).rows ?? [];
+  } catch {
+    box.innerHTML = "";
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const next = rows.filter((r) => r.iso >= today).slice(0, 2);
+  box.innerHTML = "";
+  for (const r of next) {
+    const d = document.createElement("div");
+    d.className = "upnext-row" + (r.planned ? "" : " unplanned");
+    const when = new Date(`${r.iso}T00:00:00`).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    const what = r.planned ? r.content || r.topic : "not planned yet";
+    d.innerHTML =
+      `<span class="when">${escapeHtml(when)}</span><b>${escapeHtml(what)}</b>` +
+      (r.planned && r.homework && r.homework !== "-" ? ` — due: ${escapeHtml(r.homework)}` : "");
+    box.appendChild(d);
+  }
+}
 
 async function renderShelf(show: boolean) {
   const wrap = $<HTMLDivElement>("shelf-wrap");
   wrap.style.display = show ? "block" : "none";
   if (!show) return;
+  void renderUpNext();
   const list = $<HTMLDivElement>("shelf");
   const note = (text: string) => {
     list.innerHTML = "";
