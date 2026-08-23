@@ -108,7 +108,10 @@ Things currently believed but not demonstrated. Each names what would actually s
   deliberately stopped server produces one reload and then the fallback message — not a loop.
 
 ### B4. The OAuth client's redirect URI has not been independently confirmed
-- [ ] **Open — self-announcing, so low cost to leave**
+- [x] **Resolved 2026-08-22, Phase C.** Both `jadexqwang@gmail.com` and `jadewang@tamu.edu`
+  completed a real browser sign-in. No `redirect_uri_mismatch`, so the URI registered in the
+  Console matches what IAP sends. (The `302` also showed IAP sending exactly the expected
+  string, but only a completed sign-in proves Google has it registered.)
 - The instructor added the IAP redirect URI in the Console on 2026-08-22. It cannot be verified
   from here: the downloaded client JSON is a creation-time snapshot that never updates, and the
   OAuth client admin API was shut down 2026-03-19 (plan §14l).
@@ -204,6 +207,31 @@ Recorded so they are not rediscovered as if they were new problems.
   unattended. **Resolved when:** either a spend limit exists on the Ollama account, or a
   deliberate decision is recorded that none is wanted at the final class size.
 
+### D3. §6 of the plan was a pre-spike skeleton
+- [x] **Resolved 2026-08-22.** §6 rewritten as a five-stage runbook against §14f/§14l/§14m/§14n.
+  All seven original steps were stale: the FUSE mount was abandoned, the API and bucket setup
+  were already done, and it predated the OAuth client, `IAP_JWT_AUDIENCE` and snapshot storage.
+
+### D4. §8, §9 and §14 are three layers of correction
+- [ ] **Open — deliberately deferred**
+- Superseded sections are patched with markers rather than rewritten. Consolidation was put off
+  until Phase B closed so it would not be done twice. Phase B is now closed.
+
+### D5. Student Google addresses — one supplied for testing, four still outstanding
+- [ ] **Partially unblocked 2026-08-22**
+- Full class is five students plus the instructor = six accounts. Only the accessor grant and
+  the optional `ROSTER` display name need an address; **the email alone is sufficient.**
+- **Test account: `jadewang@tamu.edu`** — the instructor's second Google account, confirmed a
+  real Google identity (it appears in the Google account chooser). Useful beyond convenience:
+  `ADMIN_EMAILS` will hold `jadexqwang@gmail.com`, so the tamu.edu account arrives as an
+  ordinary student and exercises both roles for real.
+- **Granting one changes nothing else.** IAP grants are per-account and additive, and the five
+  student offices `office-s1`…`office-s5` are static geometry in `map.ts`. `ROSTER` only maps
+  email to display name in `identity.ts` — nothing derives rooms from it, so the other four
+  offices simply stand empty.
+- **Keep real student addresses out of this repo** when the other four arrive. Both files here
+  are tracked; use a local file or pass them straight to `gcloud`. Git history outlives an edit.
+
 ### D6. Cloud Run CPU throttling starves the snapshot writer between requests
 - [x] **Resolved 2026-08-22.** `gcloud run services update stat689 --no-cpu-throttling` —
   revision `stat689-00002-c5j`, annotation confirmed `false`. Reused the existing image, so it
@@ -238,8 +266,8 @@ Recorded so they are not rediscovered as if they were new problems.
 - **Still worth watching:** confirm an idle-period flush on the new revision completes in the
   same order of time as one during activity. Not yet observed under `cpu-throttling: false`.
 
-### D7. Verification artefacts are in the production bucket
-- [ ] **Open — do this before the first class, not before the next test**
+### D7. Verification artefacts are in the production bucket — WIPE BEFORE THE FIRST CLASS
+- [ ] **Open — action required, and the safe window is now closing**
 - The Phase C probes joined the real room as `iap-probe@stat689.iam.gserviceaccount.com`, so
   that identity appears in the session log inside `gs://stat689-data/state/current.tar.gz` and
   in `state/daily/2026-08-22.tar.gz`.
@@ -247,35 +275,53 @@ Recorded so they are not rediscovered as if they were new problems.
   conversation or board post was created by the probes. But it is the same category of thing
   Stage 1a had to clean up, and the cheapest moment to remove it is before anyone has real
   state worth keeping.
-- **Do not run this after students have used the space** — it deletes their work.
-  `gcloud storage rm -r gs://stat689-data/state --project=stat689`
-- **Resolved when:** the bucket is wiped after browser verification finishes and before the
-  first class.
+- Browser verification finished 2026-08-22, so the snapshot now also holds the instructor's
+  own test session alongside the probe's.
+- **The window.** Right now the bucket contains nothing but test artefacts, so wiping is free.
+  Once a student uses the space, the same command destroys their work and there is no undo —
+  the bucket has no versioning. **After that point this item should be closed as "won't do"
+  rather than executed late.**
 
-### D3. §6 of the plan was a pre-spike skeleton
-- [x] **Resolved 2026-08-22.** §6 rewritten as a five-stage runbook against §14f/§14l/§14m/§14n.
-  All seven original steps were stale: the FUSE mount was abandoned, the API and bucket setup
-  were already done, and it predated the OAuth client, `IAP_JWT_AUDIENCE` and snapshot storage.
+  ```
+  gcloud storage rm -r gs://stat689-data/state --project=stat689
+  ```
 
-### D4. §8, §9 and §14 are three layers of correction
-- [ ] **Open — deliberately deferred**
-- Superseded sections are patched with markers rather than rewritten. Consolidation was put off
-  until Phase B closed so it would not be done twice. Phase B is now closed.
+  The service recreates the prefix on the next flush; `restore` handles a missing snapshot by
+  design (proven at the Stage 2 first boot).
+- **Resolved when:** either the wipe is done before the first class, or a student has used the
+  space and the item is deliberately closed unexecuted.
 
-### D5. Student Google addresses — one supplied for testing, four still outstanding
-- [ ] **Partially unblocked 2026-08-22**
-- Full class is five students plus the instructor = six accounts. Only the accessor grant and
-  the optional `ROSTER` display name need an address; **the email alone is sufficient.**
-- **Test account: `jadewang@tamu.edu`** — the instructor's second Google account, confirmed a
-  real Google identity (it appears in the Google account chooser). Useful beyond convenience:
-  `ADMIN_EMAILS` will hold `jadexqwang@gmail.com`, so the tamu.edu account arrives as an
-  ordinary student and exercises both roles for real.
-- **Granting one changes nothing else.** IAP grants are per-account and additive, and the five
-  student offices `office-s1`…`office-s5` are static geometry in `map.ts`. `ROSTER` only maps
-  email to display name in `identity.ts` — nothing derives rooms from it, so the other four
-  offices simply stand empty.
-- **Keep real student addresses out of this repo** when the other four arrive. Both files here
-  are tracked; use a local file or pass them straight to `gcloud`. Git history outlives an edit.
+---
+
+## E. Functional defects found in the deployed app
+
+Product bugs, as distinct from deployment problems. Found by using the thing, not by testing it.
+
+### E1. The TA cannot post to the Library board
+- [ ] **Open — reported by the instructor 2026-08-22, deferred by decision ("we can fix this
+  later"). Not a deployment blocker: sign-in, identity, rooms and the TA conversation all work.**
+- **Symptom as reported:** signed in and walking the space works, but the TA does not manage to
+  post anything to the Library board. Everything else seemed fine.
+- **Not yet reproduced or diagnosed.** What follows is where to start, not a cause. Do not treat
+  any of it as established.
+- **The moving parts:**
+  - `virtual_space/server/map.ts:53` — `library` is `kind: "special"` with `hasBoard: true` and
+    `forcedSkill: "announce"`. So posting is meant to run through the `announce` skill, not
+    ordinary chat.
+  - `virtual_space/server/boards.ts` — board storage, capped at `MAX_ITEMS = 50`, persisted to
+    `DATA_DIR/boards.json`.
+  - `virtual_space/server/rooms/MainRoom.ts:418` — falls back to `"library"` when the TA's
+    current room has no board.
+  - `virtual_space/client/src/main.ts:305` — client-side branch on `r.id === "library"`.
+- **Two questions worth answering before touching code:** does it fail the same way locally, and
+  does it fail for the admin as well as for a student? The board is written by the TA *on the
+  admin's behalf*, so a permission or role check is a plausible place to look — but that is a
+  guess, and the local-vs-deployed answer is what makes it cheap to narrow.
+- **Worth checking `boards.json` reaches the snapshot.** It lives under `DATA_DIR`, which
+  `docker/sync.mjs` watches, so it should — but if posts ever do work and then vanish across a
+  restart, that is a different bug from this one and should not be confused with it.
+- **Resolved when:** the TA pins a post to the Library board in the deployed app, a student
+  walking in sees it, and it survives an instance restart.
 
 ---
 
@@ -288,6 +334,10 @@ turned out to be a non-issue is worth as much as the open list.
 B5 (`--no-allow-unauthenticated` + `--iap`), D1 (least-privilege runtime account, with the
 `objectUser` overwrite actually exercised). D3 was resolved earlier the same day.
 
-Still open and needing a browser: **B4** (redirect URI — settles on first real sign-in) and
-**B3** (auto-reload guard). **B2** resolves by accident during a class. New from this
-deploy: **D6** (CPU throttling) and **D7** (bucket cleanup).
+**2026-08-22, browser verification:** B4 (redirect URI) closed by a real sign-in on both
+accounts. D6 (CPU throttling) closed the same day.
+
+Still open: **B2** and **B3** (both resolve by accident during a class), **D7** (bucket wipe,
+time-limited — see the note there), **A1**/**A2** (pre-existing test failures), **D2**/**D2b**
+(allowances), **D4** (plan consolidation), **D5** (four student addresses), and new from using
+the deployed app: **E1** (TA cannot post to the Library board).
