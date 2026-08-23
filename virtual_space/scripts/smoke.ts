@@ -64,6 +64,8 @@ async function main() {
   student.onMessage("board", (m) => boards.push(m));
   student.onMessage("typing", (m) => console.log(`  (${m.name} is typing…)`));
   student.onMessage("adminAck", () => {});
+  student.onMessage("doors", () => {});
+  student.onMessage("notice", () => {});
 
   const me = () => world.entities.find((e) => e.id === init?.you);
   const taEnt = () => world.entities.find((e) => e.id === "agent-ta");
@@ -111,6 +113,7 @@ async function main() {
     console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`);
   });
   admin.onMessage("notice", () => {});
+  admin.onMessage("doors", () => {});
   await wait(500);
   assert(world.entities.length === 7, "admin joined without adding an avatar");
 

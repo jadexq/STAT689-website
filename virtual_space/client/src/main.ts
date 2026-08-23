@@ -523,7 +523,10 @@ function addMsg(opts: { who: string; text: string; room?: string; cls?: string; 
   }
   const body = document.createElement("span");
   body.className = "body";
-  body.textContent = opts.text;
+  // The TA brain writes light markdown, and it used to arrive here as literal
+  // ** and ` characters — which nobody noticed while the TA was a side show
+  // and everybody notices now that talking to them is the whole app.
+  body.innerHTML = renderRich(opts.text);
   div.appendChild(body);
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
@@ -542,14 +545,19 @@ function setAdminStatus(note: string, ok: boolean) {
   el.className = ok ? "ok" : "err";
 }
 
-// Escape, then turn bare URLs into links.
+// Escape FIRST, then re-introduce the handful of markers the TA brain uses.
+// Order matters: everything below operates on already-escaped text, so no
+// model output can inject markup, and the link pattern only ever matches
+// http(s), never javascript:.
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderRich(text: string): string {
-  const esc = escapeHtml(text);
-  return esc.replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  return escapeHtml(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 
 function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {

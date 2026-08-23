@@ -63,6 +63,8 @@ async function main() {
   student.onMessage("board", (m) => sBoards.push(m));
   student.onMessage("typing", () => {});
   student.onMessage("adminAck", () => {});
+  student.onMessage("doors", () => {});
+  student.onMessage("notice", () => {});
 
   const admin: Room = await client.joinOrCreate("main", { devUser: "jade@local", role: "admin" });
   admin.onMessage("init", () => {});
@@ -81,6 +83,7 @@ async function main() {
   });
   const notices: any[] = [];
   admin.onMessage("notice", (m) => notices.push(m));
+  admin.onMessage("doors", () => {});
 
   const me = () => world.entities.find((e) => e.id === init?.you);
   const taEnt = () => world.entities.find((e) => e.id === "agent-ta");

@@ -28,6 +28,8 @@ async function main() {
   first.onMessage("board", () => {});
   first.onMessage("chat", () => {});
   first.onMessage("typing", () => {});
+  first.onMessage("doors", () => {});
+  first.onMessage("notice", () => {});
   await wait(500);
   const commons = init1.rooms.find((r: any) => r.id === "commons").spawn;
   first.send("goto", commons);
@@ -41,6 +43,8 @@ async function main() {
   second.onMessage("board", () => {});
   second.onMessage("chat", () => {});
   second.onMessage("typing", () => {});
+  second.onMessage("doors", () => {});
+  second.onMessage("notice", () => {});
   await wait(800);
 
   const anas = world.entities.filter((e: any) => e.name === "Ana");
