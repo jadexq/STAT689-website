@@ -497,11 +497,21 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 
 ### E4. Cross-document retrieval has never been exercised
 - [ ] **Open — not a defect. A gap in what the evidence can support.**
-- **2026-08-23, after 3b:** the corpus now lists a second searchable document — the class
-  project's README, fetched from GitHub — but the real README is `# STAT689-project` and nothing
-  else, so it contributes **zero chunks** and discriminates nothing. The plumbing that would close
-  this is in place; the text is not. It closes the day the README has content, and
-  `materials-test` step 11 already counts its chunks and will stop printing the caveat by itself.
+- **2026-08-23, after 3b:** the corpus listed a second searchable document — the class project's
+  README, fetched from GitHub — but the real README is `# STAT689-project` and nothing else, so it
+  contributed **zero chunks** and discriminated nothing. The plumbing was in place; the text was
+  not.
+- **2026-08-23, later the same day — now exercised, in the test corpus.** A second substantial
+  reading (~14 KB on transformers, 28 chunks) was added to the local `MATERIALS_DIR` fixture, and
+  `materials-test` gained **step 12**: every document that contributes chunks must rank itself
+  first when asked for by title, and a query spanning two documents must return passages from
+  more than one. Both pass, and a live check discriminates correctly — an attention question is
+  answered from the transformer notes, an agent-loop question from the practitioner's notes with
+  a section citation. The suite prints how many searchable documents actually contribute chunks,
+  so this reports itself rather than being argued.
+- **Still open, narrowly:** the fixture is not the real corpus. What remains is the second half of
+  "resolved when" below — the instructor's own documents in place, and a handful of real course
+  questions checked to see whether the passage returned is the one a human would have picked.
 - `materials/manifest.json` lists **one** reading, so every part of `searchMaterials` that exists
   to choose *between* documents — the idf weighting, the title boost, `MAX_CHUNKS_PER_DOC` — is
   running but has nothing to discriminate. `scripts/materials-test.ts` says so out loud rather

@@ -36,6 +36,15 @@ async function main() {
   if (searchable.length === 1) {
     console.log("  ! only one searchable document — cross-document ranking is not exercised here");
   }
+  // Listed and indexable are different claims: a reading with no body (the
+  // fetched README, until someone writes it) is a document the ranker never
+  // sees. Step 12 keys off this count, not off `searchable`.
+  const indexable = (
+    await Promise.all(
+      searchable.map(async (r) => ({ r, parts: (await searchWithin(r.id, r.title, 10_000_000)).length }))
+    )
+  ).filter((x) => x.parts > 0);
+  console.log(`  · ${indexable.length} of ${searchable.length} searchable document(s) contribute chunks`);
 
   console.log("\n2. A question about the corpus finds passages");
   // The document with the most text, not searchable[0]. Since 3b the first
@@ -175,19 +184,11 @@ async function main() {
     const parts = (await searchWithin(readme.id, readme.title, 10_000_000)).length;
     if (!parts) {
       // True as of 3b: the repo's README is a single heading with no body, so
-      // it contributes no chunks at all. The plumbing is right and the corpus
-      // is still effectively one searchable document. This turns itself off
-      // when the instructor writes the README.
+      // it contributes no chunks at all. The plumbing is right; the text is
+      // not. This turns itself off when the instructor writes the README.
       console.log(`  ! "${readme.title}" has no indexable text yet — it is a heading and nothing else`);
-      console.log("  ! so cross-document ranking is STILL not exercised (open-issues E4)");
     } else {
-      const others = searchable.filter((r) => r.id !== readme.id);
-      assert(others.length > 0 && parts > 0, `${parts} chunk(s), alongside ${others.length} other document(s)`);
-      const hits = await searchMaterials(first.title);
-      assert(
-        hits.length > 0 && hits[0].readingId === first.id,
-        "…and a title query still ranks its own document first"
-      );
+      assert(parts > 0, `${parts} chunk(s) in the index`);
     }
     // The stub floor in matchReading: a near-empty reading must not capture
     // the session, because coach.ts stays on a matched reading. Only
@@ -198,7 +199,31 @@ async function main() {
     }
   }
 
-  console.log("\n12. Formats");
+  // ---- cross-document ranking (open-issues E4) ----
+  console.log("\n12. Ranking between documents");
+  if (indexable.length < 2) {
+    console.log("  ! fewer than two documents contribute chunks — E4 stays unexercised");
+  } else {
+    // Every indexable document, asked for by its own title, must come back
+    // ahead of the others. This is the whole of what E4 asked for: idf, the
+    // title boost and MAX_CHUNKS_PER_DOC have something to discriminate.
+    for (const { r } of indexable) {
+      const hits = await searchMaterials(r.title);
+      assert(
+        hits.length > 0 && hits[0].readingId === r.id,
+        `"${r.title.slice(0, 44)}…" ranks its own document first`
+      );
+    }
+    const a = indexable[0].r;
+    const b = indexable[1].r;
+    const mixed = await searchMaterials(`${a.title} ${b.title}`);
+    assert(
+      new Set(mixed.map((h) => h.readingId)).size > 1,
+      "…and a query spanning two documents returns passages from more than one"
+    );
+  }
+
+  console.log("\n13. Formats");
   assert(
     stripHtml("<style>x{}</style><p>Hello <b>there</b></p><script>bad()</script>").trim() ===
       "Hello there",
