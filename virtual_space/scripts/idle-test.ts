@@ -140,6 +140,26 @@ async function main() {
       `${who} was told they are being sent home`);
     await waitUntil(atHome, 40000, "…and walked back to their own room without touching anything");
   }
+  // 6 is the one that actually pins E8 down. Step 3 evicts Ana, who has no
+  // slot, so "her own room" is the commons — that catches a hardcoded office
+  // but cannot tell "their own office" from "the commons for everybody". The
+  // call site E8 fixed is this one, and only a rostered occupant exercises it.
+  console.log("\n6. A ROSTERED student evicted from the TA office lands in their OWN office");
+  if (student.init!.home === "commons") {
+    console.log(`  ! ${who} has no slot — this is the assertion that needs one. Skipping.`);
+  } else {
+    const home = spawn(student.init!.home!);
+    const meJ = () => student.world.find((x) => x.id === student.init!.you)!;
+    student.room.send("goto", spawn("office-ta"));
+    await waitUntil(() => inside(student), 30000, `${who} is in the TA office`);
+    const mark = student.notices.length;
+    await waitUntil(() => student.notices.slice(mark).some((n) => /being freed/i.test(n.text)), BUDGET_MS,
+      `${who} was told the office is being freed`);
+    await waitUntil(() => !inside(student), 30000, `${who} left the TA office`);
+    await waitUntil(() => meJ().x === home.x && meJ().y === home.y, 40000,
+      `…and landed in THEIR OWN office (${student.init!.home}), not the commons and not somebody else's`);
+  }
+
   await student.room.leave();
 
   console.log("\nIDLE TEST PASSED ✅");
