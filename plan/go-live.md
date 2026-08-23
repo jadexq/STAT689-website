@@ -82,14 +82,20 @@ during it. This cannot be checked from the deploy side.
       but does **not** remove their response files, and an orphaned hash can never be resolved
       back to a name — `summarise()` maps hash→name by hashing the *current* roster forward.
       Wipe the bucket in the same pass, or accept a permanently anonymous row.
-- [ ] **Decide whether the test account keeps IAP access.** Leaving it means that person can
-      sign into a space containing real students. Revoking is one command and reversible.
+- [x] **Second test account's IAP access revoked 2026-08-23.** Accessor list is now the
+      instructor's two accounts only. Reversible with `add-iam-policy-binding` if needed.
+      Note the principal is stored case-sensitively — `remove-iam-policy-binding` fails with
+      "binding not found" unless the member string matches the policy's casing exactly.
 - [x] **Stage 7 finished — all nine checks passed 2026-08-23** (§15i has the table and the
       evidence). Handout responses are confirmed durable across a real cold start, and the salt
       is confirmed stable across all five revisions. One defect came out of it: E9.
-- [ ] **Branch merged to main.** `multi-user-and-deploy-prep` is pushed; `main` is the one
-      lagging. Merge only after Stage 7 passes. Deploy is `--source=.`, so what runs in
-      production is a working tree, not a tag — keep the branch pushed so it is reproducible.
+- [x] **Branch merged to main 2026-08-23** (`ab2e47b`, `--no-ff`), after Stage 7 passed.
+      Deploy is `--source=.`, so what runs in production is a working tree and not a tag — keep
+      the branch pushed so any given revision stays reproducible.
+- [ ] **Redeploy to pick up the E9 fix.** `stat689-00005-5db` is still serving code from before
+      it, so the TA in production still writes `\[ … \]`. Nothing else is waiting on a deploy,
+      so this can ride along with whatever the class list requires — but do not assume the fix
+      is live before then.
 - [ ] **Course materials uploaded.** The TA answers from the corpus; a near-empty one makes its
       first impression "it does not know anything about this course".
 - [ ] **Test reading `notation-note` removed.** Uploaded 2026-08-23 to prove the corpus path.
