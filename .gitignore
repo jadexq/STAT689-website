@@ -9,3 +9,6 @@ user_requirements/
 
 # Belt and braces — each project ignores its own .env, but never at the root either
 .env
+
+# Test fixtures — large, and not the place the corpus will live (see plan 2e)
+test_material/

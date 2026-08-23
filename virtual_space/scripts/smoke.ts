@@ -1,6 +1,7 @@
 // End-to-end smoke test: joins as the student AND as the admin and
-// exercises the core loop — movement, same-room chat isolation, Terra's
-// brain-backed replies, compose→preview→post to the Library board.
+// exercises the core loop — movement, same-room chat isolation, the TA
+// pinned in their office, brain-backed replies to a student who walks in,
+// and pinning a post to the Library board.
 //
 // Requires BOTH servers, and a FRESH space server (agents persist
 // position across client connections):
@@ -39,7 +40,9 @@ function assert(v: unknown, label: string) {
 async function main() {
   console.log(`Connecting to ${URL} …`);
   const client = new Client(URL);
-  const student: Room = await client.joinOrCreate("main", { devUser: "jade@local" });
+  // ana@local, not the default jade@local: the latter is on the admin
+  // allowlist and so has no avatar to test with.
+  const student: Room = await client.joinOrCreate("main", { devUser: "ana@local" });
 
   let init: any = null;
   let world: { entities: Entity[] } = { entities: [] };
@@ -61,18 +64,23 @@ async function main() {
   student.onMessage("board", (m) => boards.push(m));
   student.onMessage("typing", (m) => console.log(`  (${m.name} is typing…)`));
   student.onMessage("adminAck", () => {});
+  student.onMessage("doors", () => {});
+  student.onMessage("notice", () => {});
 
   const me = () => world.entities.find((e) => e.id === init?.you);
-  const terra = () => world.entities.find((e) => e.id === "agent-terra");
+  const taEnt = () => world.entities.find((e) => e.id === "agent-ta");
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
-  console.log("\n1. Join / world state — 1 human + 5 virtual students + Terra");
+  console.log("\n1. Join / world state — 1 human + 5 virtual students + TA");
   await waitUntil(() => !!init, 5000, "init received");
   await waitUntil(() => world.entities.length === 7, 5000, "7 inhabitants present");
-  assert(world.entities.filter((e) => e.kind === "agent").length === 6, "6 agents (5 students + Terra)");
-  assert(at(me(), spawnOf("office-jade")), "I spawned in Jade's office");
-  assert(at(terra(), spawnOf("office-ta")), "Terra is in the TA office");
+  assert(world.entities.filter((e) => e.kind === "agent").length === 6, "6 agents (5 students + TA)");
+  // Every student starts in their OWN room. ana@local is not on the roster,
+  // so hers is the Common Area — the assertion is written against init.home
+  // so it holds either way, and would catch a spawn in someone else's office.
+  assert(at(me(), spawnOf(init.home)), `I spawned in my own room (${init.home})`);
+  assert(at(taEnt(), spawnOf("office-ta")), "TA is in the TA office");
 
   console.log("\n2. Movement");
   const bx = me()!.x;
@@ -82,19 +90,21 @@ async function main() {
   student.send("goto", { x: 0, y: 0 }); // wall: must be ignored
   await wait(400);
   assert(me()!.x === bx + 1, "invalid moves rejected by server");
+  student.send("goto", spawnOf("library"));
+  await waitUntil(() => at(me(), spawnOf("library")), 20000, "click-to-walk (BFS) reached the Library");
   student.send("goto", spawnOf("commons"));
-  await waitUntil(() => at(me(), spawnOf("commons")), 15000, "click-to-walk (BFS) reached the Common Area");
+  await waitUntil(() => at(me(), spawnOf("commons")), 20000, "…and back to the Common Area");
 
   console.log("\n3. Same-room isolation: chat with no agent nearby");
   const before = chats.length;
   student.send("chat", { text: "(talking to myself in the commons)" });
   await wait(4000);
-  assert(!chats.slice(before).some((c) => c.from !== "Jade"), "no agent replied from another room");
+  assert(!chats.slice(before).some((c) => c.from !== "Ana"), "no agent replied from another room");
 
   console.log("\n4. Admin role: no avatar, gated powers");
   student.send("admin", { action: "send", agent: "ta", dest: "commons" });
   await wait(600);
-  assert(!at(terra(), spawnOf("commons")), "student's admin command was rejected");
+  assert(!at(taEnt(), spawnOf("commons")), "student's admin command was rejected");
   const admin: Room = await client.joinOrCreate("main", { devUser: "jade@local", role: "admin" });
   admin.onMessage("init", () => {});
   admin.onMessage("world", () => {});
@@ -102,36 +112,44 @@ async function main() {
   admin.onMessage("board", () => {});
   admin.onMessage("chat", () => {});
   admin.onMessage("typing", () => {});
-  const previews: any[] = [];
-  admin.onMessage("postPreview", (m) => {
-    previews.push(m);
-    console.log(`  [preview → board ${m.suggested}] ${m.text.slice(0, 120)}`);
+  const acks: any[] = [];
+  admin.onMessage("adminAck", (m) => {
+    acks.push(m);
+    console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`);
   });
-  admin.onMessage("adminAck", (m) => console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`));
+  admin.onMessage("notice", () => {});
+  admin.onMessage("doors", () => {});
+  admin.onMessage("adminFeeds", () => {}); // the read-back feed (1d); registered to keep the log clean
   await wait(500);
   assert(world.entities.length === 7, "admin joined without adding an avatar");
-  admin.send("admin", { action: "send", agent: "ta", dest: "commons" });
-  await waitUntil(() => at(terra(), spawnOf("commons")), 30000, "admin sent Terra to the Common Area");
 
-  console.log("\n5. Proximity chat — Terra answers from the TA brain");
+  // Nobody moves an agent any more — not the TA, not a stand-in, not the
+  // instructor. Assert the refusal, not merely that nothing happened: a
+  // silently dropped command looks identical from out here.
+  const ackMark = acks.length;
+  admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
+  await waitUntil(() => acks.slice(ackMark).some((a) => !a.ok), 5000, "the walk-an-agent action is gone, and says so");
+  await wait(600);
+  assert(at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), "Sam stayed in his office");
+  assert(at(taEnt(), spawnOf("office-ta")), "the TA stayed in the TA office");
+
+  console.log("\n5. Walk into the TA office — the TA answers from the TA brain");
+  student.send("goto", spawnOf("office-ta"));
+  await waitUntil(() => at(me(), spawnOf("office-ta")), 30000, "student walked into the TA office");
   const mark = chats.length;
-  student.send("chat", { text: "Hi Terra! In one sentence, what should I focus on this week?" });
-  await waitUntil(() => chats.slice(mark).some((c) => c.from === "Terra"), 120000, "Terra replied via the TA brain");
+  student.send("chat", { text: "Hi TA! In one sentence, what should I focus on this week?" });
+  await waitUntil(() => chats.slice(mark).some((c) => c.from === "TA"), 120000, "TA replied via the TA brain");
 
-  console.log("\n6. Board post: compose → preview → pin to the Library");
-  admin.send("admin", {
-    action: "compose",
-    instruction: "Post a reminder that office hours are tomorrow at 2pm.",
-  });
-  await waitUntil(() => previews.length > 0, 120000, "post composed and previewed to admin");
-  admin.send("admin", { action: "post", board: "library", text: previews[0].text });
+  console.log("\n6. Board post: the instructor's own words, pinned to the Library");
+  const POST = "Office hours are tomorrow at 2pm.";
+  admin.send("admin", { action: "post", board: "library", text: POST });
   await wait(800);
   const boardsBefore = boards.length;
   student.send("goto", spawnOf("library"));
   await waitUntil(
-    () => boards.slice(boardsBefore).some((b) => b.roomId === "library" && b.items?.length > 0),
+    () => boards.slice(boardsBefore).some((b) => b.roomId === "library" && b.items?.some((i: any) => i.text === POST)),
     20000,
-    "student walked into the Library and saw the pinned post"
+    "student walked into the Library and saw the post, worded exactly as typed"
   );
 
   console.log("\nALL SMOKE TESTS PASSED ✅");

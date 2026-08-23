@@ -1,0 +1,11 @@
+{
+  "handout_id": "sample-attention",
+  "title": "Attention, three ways",
+  "chapter": "GPT",
+  "term": "2026F",
+  "versions": ["A", "B", "C"],
+  "sections": [
+    "why_look_around",
+    "qkv"
+  ]
+}

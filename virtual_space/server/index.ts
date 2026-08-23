@@ -1,18 +1,38 @@
 // Entry point: express serves the client, Colyseus runs the world.
 // Everything lives on localhost (MVP requirement M1).
 
+import "./env"; // MUST be first — see env.ts
 import path from "path";
-import dotenv from "dotenv";
-// Load .env from the project folder regardless of where the process is launched.
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+import fs from "fs/promises";
 import { createServer } from "http";
 import express from "express";
 import compression from "compression";
 import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MainRoom } from "./rooms/MainRoom";
-import { logFilePath } from "./logger";
-import { identityMode } from "./identity";
+import { logEvent, logFilePath } from "./logger";
+import { identify, identityMode, warmIapKeys } from "./identity";
+import { rosterSummary } from "./roster";
+import { taAgenda, taMaterialFile, taMaterials, taUpload } from "./ta";
+import { renderMarkdownPage } from "./render";
+import {
+  listBundles,
+  loadBundle,
+  loadStudentFile,
+  resolveAssignment,
+  safeId,
+  saltGuard,
+  saveBundle,
+  saveRecord,
+  summarise,
+  exportPairs,
+  exportRecords,
+  studentHash,
+  studentIndex,
+  validateBundle,
+  type Bundle,
+} from "./handouts";
+import { judgeScript, renderDashboard, renderHandoutPage, renderJudgeWidget } from "./handout-render";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -20,8 +40,462 @@ const app = express();
 // gzip before static: the Phaser bundle is ~1.2 MB minified and ~0.34 MB
 // gzipped, and Cloud Run's free tier allows only 1 GiB of egress a month.
 app.use(compression());
+// Handout bundles are the one large JSON body this server takes: six versions
+// of five sections is a couple of hundred kilobytes, well past body-parser's
+// 100 kB default. It has to be registered BEFORE the global parser — the first
+// parser to run sets req._body and every later one returns early, so a bigger
+// limit declared on the route itself would never be reached.
+app.use("/api/handouts", express.json({ limit: "8mb" }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "client", "static")));
+// KaTeX's stylesheet and ~1 MB of woff2, served straight from the installed
+// package. Copying them into client/static/ would put a megabyte of binaries
+// in git for no gain: katex is a runtime dependency, so `npm prune --omit=dev`
+// in the Dockerfile leaves it in place. Handout pages are the only pages that
+// link it, and the browser caches it after the first one.
+app.use(
+  "/katex",
+  express.static(path.join(path.dirname(require.resolve("katex/package.json")), "dist"), {
+    maxAge: "7d",
+    immutable: true,
+  })
+);
+
+// ---------- the course corpus, proxied ----------
+// The readings live with the TA and only the TA indexes them, but the TA's
+// port binds to 127.0.0.1 and Cloud Run exposes exactly one port — this one.
+// So everything a student clicks is served from here. Express 4 does not
+// forward async rejections, hence the explicit try/catch on both routes.
+
+app.get("/api/materials", async (_req, res) => {
+  try {
+    res.json({ readings: await taMaterials() });
+  } catch (err) {
+    // The Library degrades to "shelf unavailable" rather than to a broken
+    // page: the TA brain being down must not take the campus with it.
+    console.error(`[space] materials list: ${(err as Error).message}`);
+    res.status(502).json({ readings: [], error: "The reading list is unavailable right now." });
+  }
+});
+
+// ---------- the project repositories ----------
+// Config, not a board post: a pinned link would die with the next
+// boards.json wipe (open-issues D7 wipes state before the first class),
+// and a repo list is the sort of thing that should survive that. Read from
+// disk per request rather than at boot, so editing repos.json is an edit,
+// not a restart — the same reasoning as the readings manifest.
+
+interface RepoCard {
+  name: string;
+  description: string;
+  url: string;
+}
+
+app.get("/api/repos", async (_req, res) => {
+  try {
+    const raw = await fs.readFile(path.join(__dirname, "repos.json"), "utf8");
+    const parsed = JSON.parse(raw) as { repos?: RepoCard[] };
+    const repos = (parsed.repos ?? []).filter((r) => r?.name && r?.url);
+    res.json({ repos });
+  } catch (err) {
+    // A missing or malformed repos.json is an empty Computer Lab card, not a
+    // 500: the room still works, it just has nothing to show.
+    console.error(`[space] repos: ${(err as Error).message}`);
+    res.json({ repos: [] });
+  }
+});
+
+app.get("/api/agenda", async (_req, res) => {
+  try {
+    res.json(await taAgenda());
+  } catch (err) {
+    console.error(`[space] agenda: ${(err as Error).message}`);
+    res.status(502).json({ rows: [], problems: [] });
+  }
+});
+
+// A filename for the Save dialog. The TA reports no filename — only an id, a
+// title and a format — so it is built from the title, which is the name the
+// student saw on the shelf and the one they will look for on disk.
+function downloadName(title: string, format: string, type: string): string {
+  const ext =
+    (format || "").replace(/^\./, "").toLowerCase() ||
+    (type.startsWith("text/markdown") ? "md" : type.includes("pdf") ? "pdf" : type.includes("html") ? "html" : "txt");
+  const stem =
+    title
+      .normalize("NFKD")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 80) || "course-material";
+  return `${stem}.${ext}`;
+}
+
+app.get("/api/materials/:id/file", async (req, res) => {
+  try {
+    const found = await taMaterialFile(String(req.params.id));
+    if (!found) {
+      res.status(404).type("text/plain").send("No such reading.");
+      return;
+    }
+    // ?download=1 means "give me the instructor's file", so it skips the
+    // markdown rendering below — a saved copy of the generated page would be
+    // the app's HTML, not the reading. Same route rather than a second one:
+    // one place decides what a reading is.
+    const wantsFile = req.query.download === "1";
+    const list = await taMaterials().catch(() => []);
+    const reading = list.find((r) => r.id === req.params.id);
+    const title = reading?.title ?? "Course reading";
+
+    if (wantsFile) {
+      const name = downloadName(title, reading?.format ?? "", found.type);
+      // The quotes matter: a title with a space is a truncated filename
+      // without them. escaped, because a title is instructor-supplied text.
+      res.setHeader("content-disposition", `attachment; filename="${name.replace(/"/g, "")}"`);
+      res.setHeader("content-type", found.type);
+      res.send(found.bytes);
+      return;
+    }
+
+    // .md is rendered here; .html and .pdf are passed through untouched,
+    // because for those two the file already IS the presentation.
+    if (found.type.startsWith("text/markdown")) {
+      res.type("html").send(
+        renderMarkdownPage(
+          title,
+          found.bytes.toString("utf8"),
+          `/api/materials/${encodeURIComponent(String(req.params.id))}/file?download=1`
+        )
+      );
+      return;
+    }
+    res.setHeader("content-type", found.type);
+    res.send(found.bytes);
+  } catch (err) {
+    console.error(`[space] material file: ${(err as Error).message}`);
+    res.status(502).type("text/plain").send("That reading is unavailable right now.");
+  }
+});
+
+// Uploading a reading is the one write on this side of the proxy, so it is
+// the one place the HTTP surface needs an identity check. Behind IAP that is
+// a signed assertion; locally it is the dev user. Without this any student
+// could put a document into the corpus and have the TA cite it as course
+// material — the TA treats every reading as authoritative, which is the whole
+// point of the corpus and exactly why writing to it is the instructor's alone.
+app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (req, res) => {
+  let who;
+  try {
+    // ?as=… is the same local-testing override the websocket side honours,
+    // and identify() ignores it behind IAP. It is what makes "a student
+    // cannot upload" a thing the suite can actually assert.
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("upload_denied", { email: who.email });
+    res.status(403).json({ ok: false, note: "Only the instructor can add course material." });
+    return;
+  }
+  try {
+    const q = req.query as Record<string, string>;
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const result = await taUpload(q, bytes);
+    logEvent("material_upload", { by: who.email, id: q.id, bytes: bytes.length, ok: result.ok });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`[space] upload: ${(err as Error).message}`);
+    res.status(502).json({ ok: false, note: "The corpus is unavailable right now." });
+  }
+});
+
+// ---------- feedback handouts ----------
+// The instructor writes handouts outside the app and uploads one bundle each.
+// This is the second write on the browser-reachable side after 2e's reading
+// upload, and it carries the same guard for the same reason — except that a
+// handout is also the thing students are graded against, so a forged one is
+// worse than a forged reading.
+
+app.post("/api/handouts", async (req, res) => {
+  // The salt check runs before identify() on every handout route. Whether the
+  // feature is configured has nothing to do with who is asking, and "handouts
+  // are disabled, here is why" is a truer answer to a misconfigured deployment
+  // than "who are you?". It also leaks nothing an unauthenticated caller could
+  // not learn by the feature simply not working.
+  const salt = await saltGuard();
+  if (!salt.ok) {
+    res.status(503).json({ ok: false, note: salt.note });
+    return;
+  }
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("handout_upload_denied", { email: who.email });
+    res.status(403).json({ ok: false, note: "Only the instructor can add a handout." });
+    return;
+  }
+  try {
+    const bundle = req.body as Bundle;
+    // Validated here and not only in the bundler: a bundle hand-edited after
+    // bundling must not get in through the back door.
+    const problems = validateBundle(bundle);
+    if (problems.length) {
+      res.status(400).json({ ok: false, note: "That bundle is not valid.", problems });
+      return;
+    }
+    await saveBundle(bundle);
+    logEvent("handout_upload", {
+      by: who.email,
+      id: bundle.handout_id,
+      sections: bundle.sections.length,
+      versions: bundle.versions.length,
+    });
+    // Re-uploading the same handout_id replaces the content and leaves the
+    // responses in place. That is deliberate — it is how a typo gets fixed —
+    // and it is exactly why every record carries a content hash.
+    res.json({
+      ok: true,
+      handout_id: bundle.handout_id,
+      sections: bundle.sections.length,
+      versions: bundle.versions.length,
+    });
+  } catch (err) {
+    console.error(`[space] handout upload: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, note: "Could not store that handout." });
+  }
+});
+
+// The list a reader may open, for the 📝 Handouts panel. Every handout goes to
+// every student — the versions differ, the reading list does not — so this is
+// "what exists", plus how far this reader has got with each.
+app.get("/api/handouts", async (req, res) => {
+  try {
+    const salt = await saltGuard();
+    if (!salt.ok) {
+      res.status(503).json({ handouts: [], note: salt.note });
+      return;
+    }
+    const who = await identify(req, req.query.as).catch(() => null);
+    if (!who) {
+      res.status(401).json({ handouts: [] });
+      return;
+    }
+    const bundles = await listBundles();
+    const offRoster = !who.isAdmin && studentIndex(who.email) === undefined;
+    const hash = offRoster || who.isAdmin ? null : studentHash(who.email);
+    const handouts = [];
+    for (const b of bundles) {
+      const file = hash ? await loadStudentFile(b.handout_id, hash) : null;
+      handouts.push({
+        id: b.handout_id,
+        title: b.title,
+        chapter: b.chapter,
+        term: b.term,
+        sections: b.sections.length,
+        graded: file ? Object.keys(file.records).length : 0,
+      });
+    }
+    res.json({
+      handouts,
+      // The panel shows in the reader's home room, which for anyone unassigned
+      // is the Common Area — so this is the one place they find out why the
+      // links will not open, rather than discovering it on a 403.
+      ...(offRoster
+        ? { note: "You are not on the class roster yet, so no version has been assigned to you. Tell the instructor." }
+        : {}),
+    });
+  } catch (err) {
+    console.error(`[space] handout list: ${(err as Error).message}`);
+    res.status(500).json({ handouts: [] });
+  }
+});
+
+// The handout itself. Identity decides the version, and the version is written
+// down at first render rather than recomputed — see resolveAssignment().
+app.get("/handout/:id", async (req, res) => {
+  const page = (status: number, msg: string) =>
+    res.status(status).type("html").send(renderMarkdownPage("Handout", msg));
+  const salt = await saltGuard();
+  if (!salt.ok) {
+    page(503, `# Handouts are unavailable\n\n${salt.note}`);
+    return;
+  }
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    page(401, "# Not signed in\n\nCould not verify who you are.");
+    return;
+  }
+  try {
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      page(404, "# No such handout\n\nThat handout does not exist, or has not been uploaded yet.");
+      return;
+    }
+    const a = await resolveAssignment(bundle, who.email, who.isAdmin, req.query.version);
+    if (a.kind === "off-roster") {
+      // Loudly, and not by quietly handing over slot 0's rotation: two people
+      // on one rotation destroys the balance the whole design rests on.
+      logEvent("handout_off_roster", { email: who.email, id: bundle.handout_id });
+      page(
+        403,
+        `# You are not on the class roster\n\n**${who.email}** has no student slot, so no version of ` +
+          `this handout has been assigned to you.\n\nThis is a one-line fix on the instructor's side ` +
+          `(the \`STUDENTS\` setting) — tell them which address you signed in with.`
+      );
+      return;
+    }
+    logEvent("handout_open", {
+      email: who.email,
+      id: bundle.handout_id,
+      mode: a.kind,
+      ...(a.kind === "preview" ? { version: a.version } : {}),
+    });
+    res.type("html").send(
+      renderHandoutPage({
+        bundle,
+        assigned: a.kind === "student" ? a.assigned : {},
+        preview: a.kind === "preview" ? a.version : undefined,
+        // The admin sees the prose exactly as a student would and no widget:
+        // a preview that could be graded would put the instructor's own
+        // opinion into a dataset of student opinion.
+        afterSection:
+          a.kind === "student" ? (s) => renderJudgeWidget(s.section_id, a.records[s.section_id]) : undefined,
+        scripts: a.kind === "student" ? judgeScript(bundle.handout_id) : undefined,
+      })
+    );
+  } catch (err) {
+    console.error(`[space] handout page: ${(err as Error).message}`);
+    page(500, "# That handout could not be opened\n\nTry again in a moment.");
+  }
+});
+
+// A student's judgement of one section. The identity comes from identify() and
+// NEVER from the body — this is a write open to students, which is exactly why
+// the record is keyed by the caller rather than by what the caller claims.
+app.post("/api/handouts/:id/feedback", async (req, res) => {
+  const salt = await saltGuard();
+  if (!salt.ok) {
+    res.status(503).json({ ok: false, note: salt.note });
+    return;
+  }
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  try {
+    if (who.isAdmin) {
+      // The preview records nothing, and this is the second place that has to
+      // be true: a curl from the admin must not be able to do what the page
+      // deliberately does not offer them.
+      res.status(403).json({ ok: false, note: "The instructor's preview is not recorded." });
+      return;
+    }
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      res.status(404).json({ ok: false, note: "No such handout." });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await saveRecord(bundle, who.email, {
+      section_id: body.section_id,
+      grade: body.grade,
+      tags: body.tags,
+      comment: body.comment,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    logEvent("handout_feedback", {
+      email: who.email,
+      id: bundle.handout_id,
+      section: result.record.section_id,
+      version: result.record.version_id,
+      grade: result.record.grade,
+      tags: result.record.tags.length,
+      comment_chars: result.record.comment.length,
+    });
+    res.json({ ok: true, saved: result.record.ts });
+  } catch (err) {
+    console.error(`[space] handout feedback: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, note: "Could not save that." });
+  }
+});
+
+// What the instructor came for. Aggregated by section rather than by person,
+// worst first, comments verbatim — the grades are the index into the comments,
+// so the view is ordered to put the section worth rewriting at the top.
+//
+// The two JSONL exports are the same data in the two shapes it is wanted in:
+// one line per record for a reward model, and derived (objective, chosen,
+// rejected) triples for DPO. The pairs are built at export time and never
+// stored — they are a view over the records, not a second source of truth.
+app.get("/admin/handouts/:id", async (req, res) => {
+  const salt = await saltGuard();
+  if (!salt.ok) {
+    res.status(503).type("text/plain").send(salt.note);
+    return;
+  }
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).type("text/plain").send("Could not verify who you are.");
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("handout_dashboard_denied", { email: who.email });
+    res.status(403).type("text/plain").send("Only the instructor can read handout feedback.");
+    return;
+  }
+  try {
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      res.status(404).type("text/plain").send("No such handout.");
+      return;
+    }
+    if (req.query.format === "jsonl") {
+      const lines: unknown[] = [];
+      let note = "";
+      if (req.query.pairs) {
+        const { pairs, stale, ties } = await exportPairs(bundle);
+        lines.push(...pairs);
+        note = `${pairs.length} pair(s), ${ties} tie(s) dropped, ${stale} record(s) skipped as stale`;
+      } else {
+        lines.push(...(await exportRecords(bundle)));
+        note = `${lines.length} record(s)`;
+      }
+      logEvent("handout_export", { by: who.email, id: bundle.handout_id, pairs: !!req.query.pairs, note });
+      res
+        .type("application/x-ndjson")
+        .setHeader(
+          "content-disposition",
+          `attachment; filename="${bundle.handout_id}${req.query.pairs ? "-pairs" : "-records"}.jsonl"`
+        );
+      res.send(lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length ? "\n" : ""));
+      return;
+    }
+    res.type("html").send(renderDashboard(await summarise(bundle, req.query.names === "1")));
+  } catch (err) {
+    console.error(`[space] handout dashboard: ${(err as Error).message}`);
+    res.status(500).type("text/plain").send("Could not read that handout's feedback.");
+  }
+});
 
 const httpServer = createServer(app);
 const gameServer = new Server({
@@ -33,5 +507,8 @@ httpServer.listen(PORT, () => {
   console.log(`Virtual Space running at http://localhost:${PORT}`);
   console.log(`Session log: ${logFilePath()}`);
   console.log(`Auth: ${identityMode()}`);
+  console.log(`Roster: ${rosterSummary()}`);
+  void saltGuard().then((g) => console.log(`Handouts: ${g.note}`));
+  warmIapKeys(); // fetch IAP's signing keys now, not on the first student
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });

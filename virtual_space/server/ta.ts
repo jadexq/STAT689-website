@@ -20,13 +20,15 @@ export interface TaWho {
   name: string;
 }
 
-// One chat turn with the brain. `skill` (optional) bypasses the TA's
-// intent router — used for the room-based modes (classroom/prep/broadcast).
-export async function taChat(
-  who: TaWho,
-  message: string,
-  skill?: string,
-): Promise<TaChatResult> {
+// One chat turn with the brain. No skill parameter: the TA brain has exactly one skill now, so there is
+// nothing for a caller to force. The wire still accepts one — see
+// virtual_ta/server/router.ts SINGLE_SKILL — but nothing here sends it.
+// `bulletin` is course logistics the space knows and the brain does not: the
+// instructor's announcements, and later the agenda. Sent per turn rather than
+// synced, because it is small and because the alternative — the brain reading
+// the space's boards.json across a server boundary — couples two processes
+// that otherwise only speak HTTP.
+export async function taChat(who: TaWho, message: string, bulletin?: string): Promise<TaChatResult> {
   const res = await fetch(`${TA_BASE}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -34,7 +36,7 @@ export async function taChat(
       sessionId: who.sessionId,
       message,
       who: { email: who.email, name: who.name },
-      ...(skill ? { skill } : {}),
+      bulletin: bulletin || undefined,
     }),
     signal: AbortSignal.timeout(180_000),
   });
@@ -55,4 +57,74 @@ export async function taListen(text: string): Promise<void> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`TA listen HTTP ${res.status}`);
+}
+
+// ---------- the course corpus ----------
+// The TA owns the corpus: virtual_ta/materials/ plus its manifest is what
+// searchMaterials indexes. A second copy on this side, for the Library to
+// render from, would drift within a month — so the Library renders whatever
+// the TA reports. One list, two consumers. These two calls are the bridge,
+// and they exist only because the TA's port is not reachable from a browser.
+
+export interface TaReading {
+  id: string;
+  title: string;
+  link?: string;
+  format: string; // "md" | "html" | "pdf" | …
+}
+
+export async function taMaterials(): Promise<TaReading[]> {
+  const res = await fetch(`${TA_BASE}/api/materials`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`TA materials HTTP ${res.status}`);
+  const body = (await res.json()) as { readings?: TaReading[] };
+  return body.readings ?? [];
+}
+
+// Null means "no such reading", which is a 404 to the student rather than an
+// error — an id can go stale when the instructor edits the manifest.
+export async function taMaterialFile(
+  id: string
+): Promise<{ bytes: Buffer; type: string } | null> {
+  const res = await fetch(`${TA_BASE}/api/materials/${encodeURIComponent(id)}/file`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`TA material HTTP ${res.status}`);
+  return {
+    bytes: Buffer.from(await res.arrayBuffer()),
+    type: res.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
+export interface TaAgendaRow {
+  date: string;
+  iso: string;
+  week: string;
+  lecture: string;
+  content: string;
+  homework: string;
+  topic: string;
+  planned: boolean;
+}
+
+export async function taAgenda(): Promise<{ rows: TaAgendaRow[]; problems: string[] }> {
+  const res = await fetch(`${TA_BASE}/api/agenda`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`TA agenda HTTP ${res.status}`);
+  return (await res.json()) as { rows: TaAgendaRow[]; problems: string[] };
+}
+
+// Forward one uploaded reading to the corpus. The caller MUST have checked
+// that the uploader is the instructor — see server/index.ts.
+export async function taUpload(
+  params: Record<string, string>,
+  bytes: Buffer
+): Promise<{ ok: boolean; note: string; id?: string }> {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${TA_BASE}/api/materials?${qs}`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: new Uint8Array(bytes),
+    signal: AbortSignal.timeout(60_000),
+  });
+  return (await res.json()) as { ok: boolean; note: string; id?: string };
 }

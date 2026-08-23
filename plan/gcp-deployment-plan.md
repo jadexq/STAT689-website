@@ -1,10 +1,18 @@
 # STAT 689 — Google Cloud deployment plan
 
 **Status:** approved 2026-08-20 · **Phase A built and verified** · **Phase B complete
-2026-08-22** · Phase C not started
+2026-08-22** · **Phase C deployed and verified 2026-08-22** · **redeploy drafted 2026-08-23
+(§15), not executed — what is live is 61 commits behind**
+
+> **Status lives in [`open-issues.md`](./open-issues.md), not here.** This line is a coarse
+> marker only. It read "Phase C not started" for several hours *after* Phase C was deployed —
+> the same drift that D3 and D4 record. Do not restate per-item status in this file.
+
 **Written:** 2026-08-20 · **Author:** Claude, for Jade Wang
 **Scope of this doc:** deploy the virtual space + virtual TA to Google Cloud so ~5 students
 can log in with their Google accounts.
+**Not in this doc:** application design decisions — those live in
+[`app-changes.md`](./app-changes.md).
 
 > **This file is tracked in git.** It was moved out of the gitignored `user_requirements/`
 > on 2026-08-22 so that the deployment findings have a backup — they are not recorded
@@ -16,6 +24,11 @@ can log in with their Google accounts.
 >   the IAP grants; keep them in a local file or pass them straight to `gcloud`, and leave
 >   placeholders here. The sample records in this doc (`ana@tamu.edu`, "Ana Ruiz", `a@b.com`)
 >   are invented and should stay that way.
+
+> **Open problems live in [`open-issues.md`](./open-issues.md)**, not in this file. This one
+> explains why decisions were made and reads as a narrative; that one tracks what is still
+> outstanding and is meant to be ticked off. Status written into a narrative goes stale — two
+> sections here had to be corrected on 2026-08-22 for exactly that reason.
 
 ---
 
@@ -66,7 +79,7 @@ independent of cloud. This is the single largest item in the plan.
 const ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
 ```
 
-Any student appending `?role=admin` gets: drive Terra, speak as Terra, post to bulletin
+Any student appending `?role=admin` gets: drive the TA, speak as the TA, post to bulletin
 boards, and open the lecture mic. Must be server-side and allowlisted before anyone but you
 has the URL.
 
@@ -135,6 +148,11 @@ export function identify(req: IncomingMessage): Identity
 - `isAdmin` = email ∈ `ADMIN_EMAILS` (comma-separated env var).
 - Display name from a small `ROSTER` map (email → "Sam"), falling back to the email's
   local part. Keeps avatar labels readable.
+- **Added 2026-08-22:** an address is also mapped to a *student character* — an office and a
+  name — by `STUDENTS` (`virtual_space/server/roster.ts`). Precedence for the display name is
+  `ROSTER` → the character they took over → a guess from the address. An address with no
+  character still gets in, but lands in the Common Area. See **D5b**: this is a second thing
+  every account needs, separate from the IAP grant.
 
 **`virtual_space/server/rooms/MainRoom.ts`**
 
@@ -196,6 +214,17 @@ One `.env.example` documenting: `TRUST_IAP_HEADER`, `DEV_USER`, `ADMIN_EMAILS`, 
 `PORT`, `TA_BASE_URL`, `DATA_DIR`, `OLLAMA_API_KEY`. `DATA_DIR` is new — it lets `data/` and
 `output/` point at the GCS mount in prod and stay local in dev.
 
+**Added 2026-08-22:** `IAP_JWT_AUDIENCE`, `SNAPSHOT_URI`, `STUDENTS` (which student character
+each address controls — see **D5b**), and the idle windows `SOLO_WARN_S`, `SOLO_IDLE_S`,
+`HOME_IDLE_S`. `virtual_space/.env.example` is the current list; this paragraph is not.
+
+**One trap worth knowing:** `.env` is loaded by `server/env.ts`, which **must stay the first
+import** of the process. It was a `dotenv.config()` call partway down `index.ts` until
+2026-08-22, and because ES imports are hoisted, every module reading `process.env` at module
+scope had already run — so `.env` was silently ignored for exactly the settings that are read
+once at startup. It never affected the cloud, where Cloud Run sets real environment variables,
+which is why it survived this long.
+
 ### A6 · Container
 
 - `Dockerfile` (multi-stage, `node:25-slim`): install both projects, run the esbuild client
@@ -226,40 +255,243 @@ Two things I will not guess at. A hello-world Cloud Run service, no app code:
 
 ---
 
-## 6. Phase C — deploy
+## 6. Phase C — deploy (runbook, rewritten 2026-08-22)
 
-1. Enable APIs: `run`, `iap`, `secretmanager`, `artifactregistry`, `cloudbuild`, `storage`.
-2. `gsutil mb -l us-central1 gs://stat689-data`
-3. Secrets → Secret Manager: `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`.
-4. `gcloud run deploy stat689 --source . --region us-central1 --min-instances=0
-   --max-instances=1 --session-affinity --timeout=3600 --memory=1Gi
-   --add-volume=name=data,type=cloud-storage,bucket=stat689-data
-   --add-volume-mount=volume=data,mount-path=/data
-   --set-secrets=OLLAMA_API_KEY=ollama-key:latest --no-allow-unauthenticated`
-5. Enable IAP on the service; grant `roles/iap.httpsResourceAccessor` to the 6 accounts.
-6. `--set-env-vars TRUST_IAP_HEADER=1,ADMIN_EMAILS=<you>,DATA_DIR=/data`
-7. Smoke test as yourself, then have one student log in before you rely on it in class.
-
-> **Steps 2 and 4 above are stale.** The `--add-volume`/`--add-volume-mount` GCS FUSE mount was
-> abandoned — see §14f (why) and §14l (the replacement, verified). Step 5 also needs an OAuth
-> client created by hand before IAP will serve anything — and the working `gcloud` sequence is
-> in §14l, which is not the one most tutorials give.
+> ### ⚠ Superseded on one point, 2026-08-23 — the roster variables below are wrong
 >
-> **Before the first student logs in, do §14m** — the runtime currently inherits
-> `roles/editor` on the whole project and should get a dedicated service account instead.
+> Stage 2, stage 3 and stage 4 step 4b name **`jadewang@gmail.com`** as the test-student account.
+> That address has no IAP grant and is not used. It was also never deployed: the live service was
+> brought up with no `STUDENTS` variable at all, so these lines are a stale instruction rather than
+> a record of what happened.
+>
+> The correct pair — `STUDENTS` **and** `ROSTER`, for two real test accounts — is in **§15h**.
+> Left in place rather than edited out because `open-issues.md` D5b quotes this history, and
+> because rewriting a runbook in place is what D3 records going wrong. Read §15h instead.
 
----
+The original §6 was written before the Phase B spike and every one of its seven steps was
+stale — the FUSE mount it deploys was abandoned, three of its APIs and both its setup steps
+are already done, and it predates IAP's OAuth client, `IAP_JWT_AUDIENCE` and the snapshot
+storage. This replaces it. Run top to bottom.
+
+**Constants used below**
+
+| | |
+|---|---|
+| project / number | `stat689` / `343454961473` |
+| region | `us-central1` |
+| service | `stat689` |
+| bucket | `gs://stat689-data` (exists; snapshots under `state/`) |
+| OAuth client | `343454961473-93ljojsu6q8r5u1ro6lviums1f5j0n74.apps.googleusercontent.com` |
+| admin | `jadexqwang@gmail.com` |
+| test student | `jadewang@tamu.edu` |
+
+### Stage 0 — preconditions (all already satisfied as of 2026-08-22)
+
+- [x] APIs enabled: `run`, `iap`, `secretmanager`, `artifactregistry`, `cloudbuild`, `storage`
+- [x] `gs://stat689-data` exists
+- [x] Secret `ollama-key` exists, verified byte-identical to the local key
+- [x] OAuth client created; redirect URI added by hand (unconfirmed — open issue B4)
+- [x] `main` fast-forwarded to a known-good state
+- [x] Instructor go-ahead on spend
+
+### Stage 1a — clear the spike's leftover snapshot
+
+`gs://stat689-data/state/current.tar.gz` and `state/daily/2026-08-21.tar.gz` are left over from
+the Phase B container round-trip. **`sync.mjs restore` runs before the servers start, so the
+first production boot would restore that test state** — the spike's conversation and board post
+would be sitting in the class space on day one.
+
+```
+gcloud storage rm -r gs://stat689-data/state --project=stat689
+```
+
+Restoring-from-empty is the normal first-boot path and `sync.mjs` handles it by design (a
+missing snapshot exits 0 rather than boot-looping). Restore still gets proven properly at
+Stage 4 step 6.
+
+### Stage 1 — the runtime service account (§14m), BEFORE the first deploy
+
+Doing this first avoids deploying twice. This is the *runtime* identity; Cloud Build keeps
+using the default compute account, which is why its `roles/editor` must **not** be stripped.
+
+```
+gcloud iam service-accounts create stat689-app \
+  --display-name="STAT689 app runtime" --project=stat689
+
+gcloud storage buckets add-iam-policy-binding gs://stat689-data \
+  --member="serviceAccount:stat689-app@stat689.iam.gserviceaccount.com" \
+  --role="roles/storage.objectUser"
+
+gcloud secrets add-iam-policy-binding ollama-key \
+  --member="serviceAccount:stat689-app@stat689.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" --project=stat689
+```
+
+**`objectUser`, not `objectCreator`.** Overwriting an existing object needs delete permission,
+so `objectCreator` lets the *first* snapshot succeed and every later one fail — the worst
+possible failure shape. Without the `secretAccessor` grant the container cannot read the key
+and never starts.
+
+IAM propagation lags. If the next stage fails on permissions, wait a minute and retry rather
+than re-granting.
+
+### Stage 2 — deploy
+
+```
+gcloud run deploy stat689 \
+  --source=. --region=us-central1 --project=stat689 \
+  --service-account=stat689-app@stat689.iam.gserviceaccount.com \
+  --min-instances=0 --max-instances=1 \
+  --timeout=3600 --memory=1Gi \
+  --no-allow-unauthenticated --iap \
+  --set-secrets=OLLAMA_API_KEY=ollama-key:latest \
+  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~STUDENTS=jadewang@gmail.com=jade~HANDOUT_SALT=<generate once, see below>~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
+```
+
+> ### ⚠ `STUDENTS` and the IAP grant are a PAIR — one without the other looks like a bug
+>
+> Every student needs **two** things, in two different places, and the failure modes look
+> nothing alike:
+>
+> | Missing | Symptom |
+> |---|---|
+> | the IAP grant (stage 3) | cannot sign in at all — Google refuses them |
+> | the `STUDENTS` entry (here) | signs in fine, and lands in the **Common Area** instead of their own office |
+>
+> The second is the dangerous one. Nothing is broken, nothing is logged to the student, and it
+> reads as "the app put me in the wrong place" rather than "one environment variable is
+> missing". The server does warn — `[roster] <address> has no student slot` — but only in the
+> Cloud Run log, which nobody is watching mid-class.
+>
+> **Do both, together, per person.** Tracked as `open-issues.md` **D5b** for the instructor's
+> own test account and **D5** for the four real students.
+
+Why each flag that is not obvious:
+
+- **`STUDENTS=jadewang@gmail.com=jade`** assigns a student character (an office and a display
+  name) to an address; see `virtual_space/server/roster.ts`. The value containing a second `=`
+  is fine — gcloud splits a `KEY=VALUE` pair on the *first* `=` only. Slots are `s1`…`s5` and
+  `jade`. Assigning a slot **removes its AI stand-in**: that office belongs to a person now.
+
+- **`HANDOUT_SALT`** salts the student hash on every feedback record. Generate it once with
+  `openssl rand -hex 24`, **write it down with the other secrets**, and never change it. Without
+  it the handout routes answer 503 (deliberately — an unsalted hash over six known addresses is
+  a lookup table). Changing it after students have answered would move every hash and orphan
+  every recorded version assignment and every grade; the app now refuses to serve handouts when
+  the salt disagrees with the data on disk, but only the old value actually recovers it. It must
+  contain no `~`, or it will break the alternate delimiter below. See open-issues **D8**.
+- **`--max-instances=1`** is correctness, not cost. Colyseus room state lives in one instance's
+  RAM; a second instance scatters reconnecting students and breaks rooms silently.
+- **`--timeout=3600`** is the maximum. B3 proved the cut is wall-clock and unavoidable, so this
+  makes it once or twice a class instead of every two minutes.
+- **No `--add-volume`.** The FUSE mount is gone (§14f). `SNAPSHOT_URI` drives `docker/sync.mjs`
+  instead: restore before boot, periodic flush after.
+- **No `--session-affinity`.** Redundant at one instance; add it only if that ever changes.
+- **`^~^` delimiter, not `^@^`.** gcloud's alternate delimiter must appear in *no* value
+  (`gcloud topic escaping`). `@` is disqualified by `ADMIN_EMAILS=jadexqwang@gmail.com` — it
+  would split the email mid-value. `~` appears in none of these values. Quoted, so the shell
+  leaves it alone.
+- **`DATA_DIR`, `PORT`, `TA_BASE_URL` are already baked into the Dockerfile** — do not pass them.
+- **`--no-allow-unauthenticated` is the one flag combination the spike did NOT verify.** It is
+  what Google's design intends — `--iap` grants the IAP service agent `run.invoker`, and this
+  stops anything else invoking the service — but `iap-spike` ran without it. If sign-in
+  succeeds and then every request 403s, this is the flag: redeploy without it, confirm, and
+  record the result against open issue B5.
+
+**If the audience is wrong, the log says so.** `f8a9098` prints the expected and received values
+once. Read it, redeploy with the corrected string. That diagnostic exists so this does not need
+a two-stage deploy — but if a single failed login is unacceptable, deploy once with
+`TRUST_IAP_HEADER=0`, capture a real assertion, then re-deploy with it set.
+
+### Stage 3 — point IAP at the OAuth client, then grant access
+
+The client attaches at the **project** level, not the service. The service-level PATCH that
+looks right returns 400 (§14l).
+
+```
+# settings.yaml written outside the repo, chmod 600, deleted afterwards:
+#   access_settings:
+#     oauth_settings:
+#       client_id: "…"
+#       client_secret: "…"
+gcloud iap settings set <path>/settings.yaml --project=stat689 --resource-type=iap_web
+
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadexqwang@gmail.com --role=roles/iap.httpsResourceAccessor
+
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadewang@tamu.edu --role=roles/iap.httpsResourceAccessor
+
+# The instructor's test-STUDENT account. Pairs with STUDENTS=…=jade in stage 2 —
+# see the warning box there. Without this grant it cannot sign in; without the
+# env var it signs in and lands in the Common Area.
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=stat689 --region=us-central1 --project=stat689 \
+  --member=user:jadewang@gmail.com --role=roles/iap.httpsResourceAccessor
+```
+
+`gcloud run services add-iam-policy-binding --role=roles/iap.httpsResourceAccessor` **errors** —
+it must be `gcloud iap web add-iam-policy-binding`. Add the other four students the same way,
+one command each — **and add each of them to `STUDENTS` at the same time**, or they sign in to
+the wrong room. Updating `STUDENTS` means `gcloud run services update stat689 --update-env-vars`,
+which is a new revision; the IAP binding is not.
+
+### Stage 4 — verify, in this order
+
+1. **`curl -sI <url>` → 302 to `accounts.google.com`.** A **502 with
+   `x-goog-iap-generated-response: true`** means the OAuth client did not attach — redo stage 3.
+2. **Sign in as the admin.** A `redirect_uri_mismatch` here is open issue B4: the error names the
+   URI Google received, so fix it in the Console and retry.
+3. **Check the startup log** for `Auth: IAP, JWT-verified (aud: …)`. If instead it shows the
+   audience diagnostic, take the "received" value and redeploy.
+4. **Sign in as `jadewang@tamu.edu`** in a separate profile. It must arrive as a *student* — no
+   admin panel — which is the real point of using a second account. It has no `STUDENTS` slot,
+   so the Common Area is the *correct* landing spot for this one.
+4b. **Sign in as `jadewang@gmail.com`.** This one must land in **Jade's Office**, not the Common
+   Area. If it lands in the Common Area the IAP grant worked and the `STUDENTS` variable did
+   not — see the warning box in stage 2. Check the startup log line
+   `Roster: 6 student slots — 1 assigned (Jade), …`; "0 assigned" names the problem outright.
+5. **One full TA conversation and one board post**, to prove the Ollama key resolved from Secret
+   Manager.
+6. **Snapshot round trip.** Confirm **two** `[sync] flushed (changed)` lines in the log, not one
+   — one proves nothing, since `objectCreator` would also produce exactly one.
+7. **Leave a tab open past the timeout.** Expect a 1006 close and a silent reconnect with the
+   avatar in place. That is B3 confirmed in production.
+
+### Stage 5 — afterwards
+
+- **Prune Artifact Registry.** 0.5 GB free, ~107 MB per image, so about four deploys fills it and
+  nothing prunes automatically (open issue D2).
+- **Tick off** B1, B3, B4, D1 and D5b in `open-issues.md`.
+- Add the remaining four students when the class starts — **IAP grant *and* a `STUDENTS` slot
+  each**, per the warning box in stage 2.
 
 ## 7. Testing
 
-| Test | Covers |
-|---|---|
-| `scripts/smoke.ts` (existing) | core loop — must keep passing |
-| `scripts/integration.ts` (existing) | TA↔space wiring, room modes |
-| `scripts/multiuser.ts` (**new**) | two identities coexist; admin gating; separate TA sessions |
-| Restart-memory check (**new**) | A3 rehydration |
-| Container smoke | A6 |
-| Post-deploy manual | IAP login, one student, one full chat, board post |
+Written 2026-08-20 as a plan; **rewritten 2026-08-22** to list what actually exists. All paths
+are relative to `virtual_space/` unless stated.
+
+| Suite | Covers | Run it with |
+|---|---|---|
+| `scripts/smoke.ts` | core loop — movement, same-room isolation, walking in to the TA, a typed board post reaching a student | `npx tsx scripts/smoke.ts` |
+| `scripts/integration.ts` | TA↔space wiring; nobody can be moved; sealed rooms; speak-as-TA; directing a stand-in | as above |
+| `scripts/multiuser.ts` | two identities coexist; admin is granted not claimed; the 1:1 door; separate TA sessions | as above |
+| `scripts/ghost-test.ts` | a rejoin replaces a stale avatar rather than adding one | as above |
+| `scripts/handout-test.ts` | feedback handouts — version rotation, the write path, the exports, the salt fingerprint | `npx tsx scripts/handout-test.ts` — brings its own servers, so nothing need be running |
+| `scripts/idle-test.ts` | the TA office frees on silence; idling anywhere else walks you home | **needs short windows on the SERVER**: `SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10 npm run dev`. Set `IDLE_TEST_STUDENT` if `STUDENTS` does not assign a slot to `jadewang@tamu.edu` |
+| `../virtual_ta/scripts/materials-test.ts` | the material index and passage search | `npm run test:materials` — no LLM, no server. **Never bare `npx tsx`**: that reads the committed fixture instead of the corpus `MATERIALS_DIR` names, and reports green against the wrong documents |
+| Container smoke | A6 | |
+| Post-deploy manual | IAP login, one student, one full chat, one board post | §6 stage 4 |
+
+**Run the first four against a FRESH space server, in that order.** (`handout-test.ts` owns its own, so it is exempt.) Agent and avatar state
+persists for the life of the process, and a suite that only passes in one order will eventually
+be believed when it should not be (`open-issues.md` A2, E5).
+
+**The two env-tunable ones are deliberately outside the default run.** Their real windows are
+minutes long, and a test that sleeps for minutes gets skipped — which is worse than not having
+it. Better an honest opt-in than a suite everyone learns to interrupt.
 
 ---
 
@@ -299,7 +531,10 @@ Two things I will not guess at. A hello-world Cloud Run service, no app code:
 
 1. **The Google account that should be admin** — presumably your personal one, since `stat689`
    isn't on TAMU.
-2. **The 5 students' Google addresses** (for the IAP allowlist and the `ROSTER` display names).
+2. **The 5 students' Google addresses.** Each one needs an IAP grant *and* a `STUDENTS` slot
+   assignment (`s1`…`s5`), which are separate places — see the warning box in §6 stage 2. A
+   `ROSTER` display name is optional and can come later; until then the student shows as the
+   character they took over (Sam, Ben, …).
 
 Neither blocks Phase A; both block Phase C.
 
@@ -380,7 +615,8 @@ account plus the five student addresses (§10).
 
 **Committed 2026-08-20** as `e83a46b` on branch `multi-user-and-deploy-prep`
 (29 files, +1045/-134), pushed. Two corrections to earlier notes here: the
-five-student roster reduction was already committed in `60c4e5f`, and git runs
+cast reduction (virtual students in `agents.ts`/`map.ts`, not the human
+roster) was already committed in `60c4e5f`, and git runs
 fine under `~/Documents` — the scratchpad-mirror workaround is not needed.
 
 ---
@@ -1078,6 +1314,63 @@ before the results are in would mean doing it twice.
    on the repo.
 
 
+### 14n. Pre-Phase-C code changes (2026-08-22)
+
+Two changes, both local, both from Phase B findings. Committed on
+`multi-user-and-deploy-prep` after `main` was fast-forwarded to `09f5e81` so there is a
+known-good rollback point behind the auth change.
+
+**`b2129b1` — verify the IAP assertion.** `identity.ts` trusted
+`x-goog-authenticated-user-email`, which is unsigned. It now verifies
+`x-goog-iap-jwt-assertion` (ES256, node `crypto`, no new dependency) and treats the header as a
+cross-check that must agree. `identify()` became async, so `MainRoom.onAuth` did too; it was the
+only caller.
+
+Two things to hold on to, because both are silent failures:
+
+- **`dsaEncoding: "ieee-p1363"`.** JOSE signatures are raw `r||s`; node defaults to DER. Omit it
+  and *every genuine token* fails to verify.
+- **The audience is the Cloud Run resource path**, `/projects/343454961473/locations/us-central1/services/<svc>` —
+  not the OAuth client ID. That is the audience of the *inbound* token, a different thing.
+
+Key handling: cached an hour, refetched on an unknown `kid`, throttled **on the last attempt
+rather than the last success**. The first version throttled on success, which meant a genuine
+Google key rotation refused every login for the whole cooldown. The rotation test caught it.
+5s now — one reconnect for a student, no amplification for an attacker.
+
+**New deploy-time requirement.** `TRUST_IAP_HEADER=1` without `IAP_JWT_AUDIENCE` now **throws at
+startup**. That is deliberate: the alternative is every login failing during class with a symptom
+that looks nothing like the cause. Add `IAP_JWT_AUDIENCE` to the §6 deploy env alongside
+`TRUST_IAP_HEADER=1` and `ADMIN_EMAILS`. `IAP_JWKS_URL` exists only to point tests at a fake.
+
+**`90bbf1d` — reload instead of asking.** After eight failed retries the client printed "Reload
+the page to rejoin". Correct advice, but it needed a student to read grey text mid-class, and a
+full page load is the *only* recovery from an expired session (§14l.6). It now reloads itself,
+guarded by a `sessionStorage` timestamp to at most one reload per five minutes so a dead server
+cannot loop.
+
+**Tests.** New `scripts/iap-jwt.ts`, 16 cases, all passing — the existing suites run with
+`TRUST_IAP_HEADER` unset and never reach this code, so without it the verification would have
+shipped untested. It mints tokens against a local ES256 key served as a JWKS and asserts that a
+bare email header, a mismatched header, a foreign audience, a bad issuer, expired and
+not-yet-valid tokens, `alg=none`, a tampered payload, an unpublished key and garbage are each
+refused.
+
+**Two pre-existing test failures surfaced while verifying this work** — `ghost-test.ts` asserts a
+stale entity count, and `multiuser.ts` only passes when run first. Both were reproduced on a
+clean checkout of `09f5e81`, so neither is a regression from these commits, and neither was
+fixed here: fixing tests inside an auth change is how you lose track of what broke what.
+
+**This verification also did not touch real IAP.** The tests mint tokens with a local key, which
+proves the logic but not that Google's tokens satisfy it. `f8a9098` makes the likeliest symptom
+self-explaining — an audience mismatch logs the expected and received strings once, so the
+correct value can be copied out of the log rather than decoded by hand.
+
+> **Status for all of the above lives in [`open-issues.md`](./open-issues.md), not here.** That
+> file is the tracker; this section is the account of what was built and why. Items A1, A2 and
+> B1 cover the three points just made, including when and how to settle the audience question.
+
+
 ### 14m. Hardening owed before students are on it — the runtime service account
 
 **Do this during Phase C, before the first student logs in.** It is not urgent today and was
@@ -1126,3 +1419,357 @@ look but not entangled with this one.
 **Verification after the change:** deploy, then confirm in the logs that the first
 `[sync] flushed (changed)` appears *and* that a second one appears after a later change —
 one flush proves the token works, two prove the overwrite permission does.
+
+---
+
+## 15. Redeploy — the 61-commit catch-up (2026-08-23)
+
+**Drafted 2026-08-23, revised the same day after review. Not executed.** Per-item status lives
+in [`open-issues.md`](./open-issues.md); this section owns the reasoning and the order.
+
+§6 is the runbook for the *first* deploy — a service that did not exist, an empty bucket, an
+OAuth client that had never been attached. None of those preconditions hold now, so this is a
+new section rather than an edit to that one. §6 stays as the record of what Phase C was, which
+is D3's lesson: a runbook rewritten in place stops being a record of anything.
+
+> **Two accounts, and only one of them may be named here.** `jadewang@tamu.edu` is the
+> instructor's own address and appears throughout this file already. The **second test account**
+> belongs to somebody else, so per this file's header its address and display name are *not*
+> written down here — they are passed straight to `gcloud` and kept with the other local
+> configuration. Below it is `<test-2>` and `<Test2Name>`.
+
+### 15a. What is actually running
+
+Read off the live service on 2026-08-23, not from memory:
+
+| | |
+|---|---|
+| revision | `stat689-00002-c5j`, serving 100% |
+| image | `…/stat689@sha256:d22ac74…`, built **2026-08-22 23:16 UTC** |
+| revision 2 | created 23:52 UTC with the **same image digest** — an env change, not a rebuild |
+| runtime SA | `stat689-app@…` ✓ (§14m applied) |
+| shape | `maxScale=1`, `timeout=3600`, `memory=1Gi`, `cpu-throttling=false`, `startup-cpu-boost=true` ✓ |
+| IAP grants | `roles/iap.httpsResourceAccessor` on all three accounts ✓ (`<test-2>` granted 2026-08-23) |
+| env present | `TRUST_IAP_HEADER`, `IAP_JWT_AUDIENCE`, `ADMIN_EMAILS`, `SNAPSHOT_URI`, the four LLM vars, `OLLAMA_API_KEY` from Secret Manager |
+| env **absent** | **`STUDENTS`**, **`ROSTER`**, **`HANDOUT_SALT`** |
+
+The infrastructure is right and both existing accounts can already sign in. The *code* is the
+working tree at about `b693564` —
+
+**61 commits and 6,488 lines of application code ago** (66 files under `virtual_space/`,
+`virtual_ta/`, `Dockerfile` and `docker/`, including nine new server modules).
+
+Everything from steps 1–4 is absent from production: announcements and boards, the Library shelf
+and the course corpus, the Computer Lab repo cards, the entire handout system, the TA
+simplification, and the six student characters.
+
+**The missing env vars are not cosmetic**, and both are already tracked:
+
+- no `STUDENTS` → every account that signs in lands in the Common Area. That is **D5b**'s quiet
+  failure, sitting in production right now. Since step 4 it is no longer quiet: such an account
+  is also refused every handout with a 403.
+- no `HANDOUT_SALT` → every handout route answers 503. That is **D8**, and it is the fail-closed
+  design working correctly rather than a bug.
+
+### 15b. Why redeploy now, rather than when the first handout is ready
+
+Not "it has been a while". Three of the new things are **container-shaped risks that the local
+suites structurally cannot catch**, and two of the three fail quietly:
+
+1. **`/katex` is served out of `node_modules/katex/dist`.** That path has to survive
+   `npm prune --omit=dev` in the build stage. `katex` is in `dependencies`, so it should — but a
+   pruned image is the only place that is ever actually tested. If it does not survive, every
+   formula in every handout renders as raw `$…$`, nothing throws, and the first person to notice
+   is a student.
+2. **`handout-format.ts` exists only to keep `yaml` and `roster.ts` out of the server's import
+   graph.** `yaml` is a devDependency, so a pruned image is likewise the only enforcement of that
+   split. This one at least fails loudly: the container dies at boot.
+3. **Bundle upload is a large JSON POST through IAP.** The body-parser ordering — a larger limit
+   registered on the path *before* the global `express.json()`, because the first parser to touch
+   a request sets `req._body` and every later one returns early — was worked out against a dev
+   server with no proxy in front of it.
+
+Then the ordinary argument: 6,488 lines is the largest untested delta this project has carried,
+and the cost of bisecting a container failure scales with it. Two smaller reasons to go now
+rather than later — **D7**'s safe window for wiping the bucket is still open and closes the first
+time a student uses the space, and the salt has to be set at deploy time regardless, so doing it
+while no handout data exists anywhere is free.
+
+### 15c. Stage 1 — the app change the deploy depends on
+
+**Do this first, not after the container build.** Stage 2 changes `package.json`, and Stage 3
+builds the image that Stage 5 ships; validating an image and then editing its inputs would mean
+deploying something nobody looked at.
+
+Two real accounts now hold two slots, and the name a person is given reaches only one of the four
+places it is shown. Design, rationale and verification are in
+[`app-changes.md`](./app-changes.md), 2026-08-23, "A person's name, everywhere the character's
+placeholder shows". In summary: `ROSTER` becomes load-bearing and drives the office label, the
+handout dashboard and the startup line as well as the avatar; slot `jade` is renamed `s6` so
+every slot id is an opaque handle; a slot assigned without a `ROSTER` name refuses to boot behind
+IAP; and the possessive test in `MainRoom.ts` is broadened so a two-word name does not produce
+"the X Y's Office door is shut".
+
+It also carries **E8** — `MainRoom.ts:392` still hardcodes `roomById("office-jade")` as the home
+of an idle TA-office occupant. That is the one call site E6's fix missed, filed separately so E6's
+resolved record stays intact, and the second test account is the first thing to make it reachable.
+
+### 15d. Stage 2 — three repo fixes, all found while reading the deploy path
+
+None of them change application behaviour. One commit, so that the image and the runbook agree.
+
+**1. `test_material/` is missing from `.gcloudignore` — open issue D10.** That file's own
+header says it *replaces* gcloud's inference from `.gitignore`, so "the list below must be
+complete" — and `test_material/` is gitignored but not listed. Its 136K therefore uploads to
+Cloud Build and bakes into the image. The content is harmless test fixtures; the gap is not,
+because it is exactly the drift the file was written to prevent and the next thing to fall
+through it might carry something. Add it to `.gcloudignore` and `.dockerignore` both.
+
+**2. The Dockerfile's comment about the prune is wrong — open issue D11.** It says "esbuild,
+phaser and typescript do not [survive the prune]". `phaser` is in `dependencies`, so it does —
+several MB of dead weight in a runtime image, and a comment that will mislead the next person
+reasoning about image size. Either move `phaser` to devDependencies or correct the comment;
+prefer the move, and verify `build:client` still works at Stage 3.
+
+**3. §7's test table tells you to run `materials-test.ts` the one way its own header forbids.**
+The table says `npx tsx scripts/materials-test.ts`; the file says **NEVER bare `npx tsx`** —
+run that way it reads the committed fixture instead of the corpus `MATERIALS_DIR` points at and
+reports green against the wrong documents, which it has done once already. Correct it to
+`npm run test:materials`. While there: the table gives `HOME_IDLE_S=12` for `idle-test.ts` where
+the file's own header says `10`, and `handout-test.ts` is missing from the table entirely.
+
+### 15e. Stage 3 — the local test gate, then the container
+
+**The suites first.** 6,488 lines have changed and Stage 1 touches identity, the roster and the
+map; this is the cheapest filter available and the first draft of this section skipped it.
+
+```
+npx tsc --noEmit                       # in virtual_space and virtual_ta both
+npm run test:materials                 # virtual_ta — no server, no LLM
+npx tsx scripts/handout-test.ts        # brings its own servers
+```
+
+then, against a **fresh** space server and in this order (agent and avatar state persists for the
+life of the process — `open-issues.md` A2, E5): `smoke.ts`, `integration.ts`, `multiuser.ts`,
+`ghost-test.ts`. Expect `smoke` and `integration` to need updating for the renamed office; that
+is Stage 1's own verification, not a regression.
+
+**Then build and run the container.** This is the highest-value step in the section and it is not
+a deploy:
+
+```
+docker build -t stat689-local .
+
+docker run --rm -p 8080:8080 -e PORT=8080 \
+  -e DEV_USER=jade@local -e ADMIN_EMAILS=jade@local \
+  -e STUDENTS='s1@local=s1,s6@local=s6' \
+  -e ROSTER='s1@local:Test Two,s6@local:Tester' \
+  -e HANDOUT_SALT=local-container-test \
+  -v stat689-local-data:/data stat689-local
+```
+
+- **A named volume, not a bind mount.** The image does `mkdir -p /data && chown node:node /data`
+  and then `USER node`; a bind mount shadows that and a host directory Docker auto-creates is
+  root-owned. A named volume is seeded from the image's directory *including ownership*.
+- **`DEV_USER` is the admin, so open `/?as=s6@local` to be a student.** An admin has no avatar and
+  `init.home === null`, and the 📝 Handouts panel is gated on `init.home` — as the admin you can
+  upload a bundle and preview `/handout/<id>`, but the assignment path needs a student.
+- **One of the two names is deliberately two words.** Stage 1 broadens the possessive test that
+  chooses between "Tester's Office door is shut" and "*the* Library door is shut"; a one-word
+  roster would not exercise the fix. Walk into the occupied TA office and read the refusal.
+- **No `SNAPSHOT_URI`,** so no bucket is touched, and **no LLM key is needed**: the TA's
+  `/api/health` returns `ok` unconditionally, so `start.sh`'s readiness probe passes and the
+  container boots with no Ollama spend. The TA simply cannot answer, which is not what this stage
+  tests.
+
+**Do not proceed to any GCP stage until this serves a handout page with rendered maths, and until
+the two offices are labelled from `ROSTER` rather than from the character placeholders.**
+
+### 15f. Stage 4 — the salt, as a Secret Manager secret rather than an env var
+
+**This deliberately amends §6 stage 2.** That command puts `HANDOUT_SALT` in `--set-env-vars`.
+But **D8** calls the salt a secret, and this file's own header rule is that a secret pasted into
+a transcript stays compromised after it is edited out. As a plain env var it appears in the
+output of every `gcloud run services describe` — including the one run to write §15a above.
+
+```
+openssl rand -hex 24
+```
+
+Put it in Secret Manager beside `ollama-key`, grant the runtime service account
+`roles/secretmanager.secretAccessor` on it, and inject it with `--set-secrets`. **No code
+change:** `--set-secrets` presents it to the process as `process.env.HANDOUT_SALT` exactly as
+before. Two extra commands buy a `describe` output that is safe to paste anywhere.
+
+Write the value down with the other secrets *before* deploying. The `~` constraint from the
+`--set-env-vars` alternate delimiter stops applying once it is a secret, but `openssl rand -hex`
+guarantees hex anyway, and a future revert to env vars should not become a trap.
+
+**Set it once and never change it.** The `.salt-fingerprint` guard turns a changed salt into a
+503 that names the fix, rather than a dashboard quietly showing fewer responses than last week —
+but only the original value actually recovers the data.
+
+### 15g. Stage 5 — grant the second account, and wipe the bucket
+
+**The IAP grant for `<test-2>` — done 2026-08-23, on the instructor's instruction.** All three
+accounts now hold `roles/iap.httpsResourceAccessor`. The command, for the record and for the four
+real students later:
+
+```
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run --service=stat689 \
+  --region=us-central1 --project=stat689 \
+  --member="user:<address>" --role="roles/iap.httpsResourceAccessor"
+```
+
+> **The policy displays addresses with their original capitalisation** — Google echoes back what
+> was typed. It does not matter: `STUDENTS` and `ROSTER` lower-case both sides of every entry, and
+> `slotFor()` lower-cases its argument, so slot and name lookups are case-safe. The one comparison
+> that is *not* case-folded on the incoming address is the admin check in `identity.ts`, and it has
+> been correct in production since Phase C — Google issues the email claim lower-cased. Worth
+> knowing before someone "fixes" a capital letter in an env var.
+
+**Then wipe the bucket — D7 — and note the correction.** The tracker's command is right but its
+procedure is incomplete: `docker/sync.mjs` flushes whenever the newest mtime in `DATA_DIR`
+advances, and it uploads the **whole tree**. Delete `state/` while a container is warm and the
+artefacts are still in that container's `/data`; the next join, message or log line puts them
+straight back.
+
+So: **confirm the service is at zero instances first**, then wipe, then do not touch the URL until
+the new revision is deployed. The wipe sticks because the next boot restores from empty, which is
+a path `sync.mjs` handles by design. D7 has been corrected to say this.
+
+The deadline is unchanged: free today, destructive the moment a student has used the space, no
+versioning and no undo.
+
+### 15h. Stage 6 — deploy
+
+§6 stage 2's command, with three amendments:
+
+- **add the roster pair.** Both variables, together, or the accounts sign in and land under a
+  character's name:
+
+  ```
+  STUDENTS=jadewang@tamu.edu=s6,<test-2>=s1
+  ROSTER=jadewang@tamu.edu:Tester,<test-2>:<Test2Name>
+  ```
+
+  `s6` is the slot renamed from `jade` in Stage 1. `<test-2>` takes `s1`, which retires that
+  slot's AI stand-in and keeps the character count at six — the slot choice is arbitrary and
+  lives in an env var, so it is a one-word change later. After Stage 1, omitting a `ROSTER`
+  entry for an assigned slot is a **boot failure** behind IAP rather than a wrong name.
+- **move `HANDOUT_SALT`** out of `--set-env-vars` and into `--set-secrets`, per 15f.
+- **ignore every reference to `jadewang@gmail.com`.** It appears in §6 stage 2, stage 3 and stage
+  4 step 4b as the test-student account; it is a third address that has no IAP grant, so nobody can
+  sign in as it. Had it gone out as written, the account actually used for testing would have
+  signed in fine and landed in the Common Area — D5b exactly. §6 now carries a superseding note
+  saying so; the lines stay because D5b quotes them.
+
+Everything else is unchanged and already correct on the live service: the runtime service
+account, `--min-instances=0 --max-instances=1`, `--timeout=3600`, `--memory=1Gi`, and
+`--no-allow-unauthenticated --iap`.
+
+**§6 stages 1 and 3 are otherwise done and must not be repeated.** The service account exists and
+IAP is attached to the OAuth client at the project level.
+
+### 15i. Stage 7 — verify the things only the cloud can answer
+
+§6 stage 4 still covers the auth path and is not repeated. These are new, in order, and each one
+exists because nothing local tests it:
+
+1. **Startup log.** `Auth: IAP, JWT-verified`, `Roster: 6 student slots — 2 assigned (Tester,
+   <Test2Name>)`, and the `Handouts:` line. "0 assigned" is D5b; a name shown as a character
+   placeholder means Stage 1 regressed; a salt complaint means 15f went wrong and the line says
+   which way.
+2. **Sign in as both students.** Each must land in **their own** office, and each office must be
+   **labelled with their name** — the real test of Stage 1, and not something the local container
+   proves for IAP-supplied identities.
+3. **Upload a bundle through the admin panel.** Regenerate it first —
+   `npm run bundle:handout fixtures/handout-sample` — because `fixtures/*.handout.json` is
+   gitignored and therefore not in the image. This is the only test of the large-body POST
+   through IAP.
+4. **Open the handout as a student and confirm the maths renders**, not raw `$…$`. This is the
+   `/katex` mount, and it is the failure that would otherwise reach a student first.
+5. **Grade a section, then open `/admin/handouts/sample-attention?names=1`.** Both names must read
+   correctly there too — it is the fourth surface, and the one with no other reader.
+6. **Force a restart and confirm the response survived.** Let the service scale to zero rather
+   than deploying a no-op revision: it is free, and it is the better test, because it also
+   exercises the SIGTERM final flush that a new revision does not. **This is the only test of
+   whether handout responses are durable at all** — `data/handouts/` is new since the last
+   container ever ran. It should round-trip; "should" is the word this step exists to replace.
+7. **Two `[sync] flushed (changed)` lines**, per §6 stage 4 step 6: one proves the token, two
+   prove the overwrite permission.
+8. **One reading upload and one TA answer citing it**, confirming step 2's corpus works when the
+   shipped fixture is the only thing in the image.
+9. **Idle one student out of the TA office** and confirm they return to their *own* office (E8).
+
+**Results — 2026-08-23, against revision `stat689-00005-5db`. All nine pass.** Checks 5 and 6
+needed a signed-in *student*, which the admin account cannot stand in for — `?as=` is ignored
+whenever `TRUST_IAP_HEADER` is set (`identity.ts:248`). The instructor graded both sections at
+23:06Z and the rest followed from that one action.
+
+| # | Result | Evidence |
+|---|---|---|
+| 1 | **pass** (18:50Z) | `Roster: 6 student slots — 1 assigned (Tester)` after the roster change |
+| 2 | **pass**, visible half | `office-s6` is labelled **TESTER'S OFFICE** and holds no stand-in; Grace's next door still does — assigning a slot deletes its AI occupant, as designed |
+| 3 | **pass** | `sample-attention.handout.json` (12.7 KB) uploaded through the admin panel: `2 sections × 3 versions`. The large-body POST survives IAP |
+| 4 | **pass**, both surfaces | Handout: the scaled dot-product equation typesets. Reading: a `.md` upload with `$$…$$` and `$…$` typesets, **and `$30` / `$5` in the next paragraph stay prose** — the `mathInline` guard holds in production, not just in argument |
+| 5 | **pass** | Both graded rows resolve `2152b290` → **Tester**, worst-first (grade 2 before grade 4), with tags and comments. The hash was independently recomputed forward from the salt to confirm it is `jadewang@tamu.edu` and not merely a plausible-looking label |
+| 6 | **pass** | The real thing, end to end: `[sync] SIGTERM — final flush` at 23:24:00Z on idle shutdown, `Starting new instance. Reason: AUTOSCALING` at 23:25:48Z, `[sync] restored 9 files (20 KB)` at 23:25:50Z, and the dashboard then served the grades from the fresh container. Handout responses are durable — the word "should" is now retired |
+| 7 | **pass** | Two distinct `[sync] flushed (changed)` lines — 22:38:20Z (3 files) and 22:40:50Z (4 files, 13 KB → 6 KB gz), plus a daily archive. This could not fire on 00003: with no traffic there is no first write, so `newest` never passes the boot baseline |
+| 8 | **pass** | A reading uploaded at 22:4xZ was retrieved, shown as a citation chip and quoted back correctly. **It also found [E9](./open-issues.md#e9)** — the TA writes `\[…\]`, which nothing renders |
+| 9 | **pass** (E8) | `scripts/idle-test.ts` step 6 — a *rostered* occupant idled out of the TA office lands in `office-s6`, not the commons |
+
+Three things worth keeping. **Check 8 was the valuable one**: checks 4 and 5 test pages the
+*instructor* writes, and check 8 was the only one that looked at what the *model* emits — which
+is where the only defect was. **Check 6 justified its own design**: letting the service idle out
+rather than deploying a no-op revision is what exercised the SIGTERM flush, and that flush is the
+step that would lose the last two minutes of grading if it were broken. **The salt held across
+all five revisions** — the same `2152b29076d7a92b` as before the wipe, which is the one silent
+failure that would orphan every record.
+
+**The test reading `notation-note` is still in the corpus**; there is no delete route
+([E7](./open-issues.md#e7)), so the pre-class bucket wipe is what removes it.
+
+
+### 15j. Stage 8 — afterwards
+
+- **Check Artifact Registry.** D2's cleanup policy is active and verified — `keep-recent-versions`
+  at 3, `delete-untagged` at 7 days, `delete-stale` at 60. One image today at 113.8 MB against the
+  0.5 GB free allowance, so a deploy plus a rollback candidate fits comfortably; iterating deploys
+  does not, which is what Stage 3 exists to prevent.
+- **Tick in `open-issues.md`, not here:** D5b (both test accounts — the real students remain D5),
+  D7, D8, D10, D11, E8, plus whatever the deploy exposes.
+- **Merge to `main` only after Stage 7 passes.** `--source=.` deploys the working tree, so this is
+  not a mechanical requirement — but `main` currently means "known good in production", which is
+  worth preserving. Deploy from `multi-user-and-deploy-prep`, verify, then merge.
+- **Wipe the bucket again** before the first real class, at zero instances per 15g, because this
+  verification will leave artefacts in it: a sample handout, two graded responses, a test reading.
+
+### 15k. What this stage deliberately does not do
+
+- **No real handout.** `fixtures/handout-sample` is a three-version fixture; the real thing is six
+  versions of four to six sections and has not been written yet. This stage proves the *plumbing*,
+  and the plumbing is what a container can break.
+- **No student onboarding.** D5's addresses are still outstanding, and **D12** — how many of the
+  six slots real students get, once two are held by test accounts — is deferred until the class
+  list is final.
+- **Nothing about E7.** There is still no way to withdraw a handout. But the removal path exists
+  and it is 15g's procedure: scale to zero, wipe the bucket, and the next boot restores from
+  empty. So the sample handout is recoverable, which is weaker than a withdraw button and
+  sufficient before any student is in the space.
+
+### 15l. Rollback
+
+`stat689-00002-c5j` stays in the revision list, and its image survives this deploy — checked
+against the cleanup policy above rather than assumed. If the new revision is bad:
+
+```
+gcloud run services update-traffic stat689 --to-revisions=stat689-00002-c5j=100 \
+  --region=us-central1 --project=stat689
+```
+
+That reverts the *code* in seconds. It does **not** revert the bucket: anything the new revision
+wrote to `state/current.tar.gz` stays written, and the old revision will restore it on its next
+boot. Given that Stage 5 empties the bucket first and every write this round is a test artefact,
+that is acceptable — but it would not be with real student state, and it is worth recording as
+the reason traffic-splitting is not a general safety net for this app.

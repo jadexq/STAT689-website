@@ -20,6 +20,11 @@ const MAX_ITEMS = 50;
 
 const boards = new Map<string, BoardItem[]>();
 
+// Ids were `post-<ms>-<list length + 1>`, which was unique only while lists
+// grew. Unpinning shrinks one, so the next post could reuse a live id and an
+// unpin would then remove the wrong item. A counter cannot repeat.
+let seq = 0;
+
 // Load persisted boards at startup (best effort).
 try {
   const raw = JSON.parse(fs.readFileSync(FILE, "utf8"));
@@ -41,9 +46,21 @@ export function getBoard(roomId: string): BoardItem[] {
   return boards.get(roomId) || [];
 }
 
+// Unpin one item. The instructor has no avatar and cannot walk to a board to
+// read it back, so without this a typo in a due date is permanent.
+export function removeFromBoard(feed: string, id: string): boolean {
+  const list = boards.get(feed);
+  const i = list?.findIndex((x) => x.id === id) ?? -1;
+  if (!list || i < 0) return false;
+  list.splice(i, 1);
+  boards.set(feed, list);
+  save();
+  return true;
+}
+
 export function postToBoard(roomId: string, by: string, text: string): BoardItem {
   const item: BoardItem = {
-    id: `post-${Date.now().toString(36)}-${(boards.get(roomId)?.length || 0) + 1}`,
+    id: `post-${Date.now().toString(36)}-${++seq}`,
     by,
     text,
     ts: new Date().toISOString(),

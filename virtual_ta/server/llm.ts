@@ -23,7 +23,31 @@ export function llmInfo(): { provider: string; model: string } {
   return { provider, model };
 }
 
-export async function chatLLM(
+// E9. The coach prompt asks for maths in `$…$`, and the model half-listens:
+// inline maths comes back right, display equations still arrive as `\[ … \]`
+// every time — reliably enough to reproduce on demand by asking for a formula.
+// A prompt is a request. This is the guarantee.
+//
+// Why it matters past the chat bubble, which renders no maths either way: TA
+// replies are also written into reading digests, and those are markdown that
+// `render.ts` later renders for real. `$$…$$` sets an equation there; `\[ … \]`
+// shows the student four literal backslashes. One dialect in, one out.
+//
+// Deliberately not touched: `\[` inside a fenced code block, where it is far
+// more likely to be Python indexing or a regex than maths.
+export function normaliseMaths(text: string): string {
+  const parts = text.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  return parts
+    .map((part, i) => {
+      if (i % 2 === 1) return part; // odd indices are the code spans themselves
+      return part
+        .replace(/\\\[([\s\S]*?)\\\]/g, (_m, body: string) => `$$${body.trim()}$$`)
+        .replace(/\\\(([\s\S]*?)\\\)/g, (_m, body: string) => `$${body.trim()}$`);
+    })
+    .join("");
+}
+
+async function rawChat(
   system: string,
   messages: ChatMessage[],
   opts: LLMOptions = {}
@@ -33,6 +57,14 @@ export async function chatLLM(
   return ollamaChat(system, messages, opts);
 }
 
+export async function chatLLM(
+  system: string,
+  messages: ChatMessage[],
+  opts: LLMOptions = {}
+): Promise<string> {
+  return normaliseMaths(await rawChat(system, messages, opts));
+}
+
 // Ask for a JSON object and parse it defensively. Returns null when the
 // model's output contains nothing parseable — callers decide the fallback.
 export async function jsonLLM(
@@ -40,7 +72,9 @@ export async function jsonLLM(
   messages: ChatMessage[],
   opts: LLMOptions = {}
 ): Promise<Record<string, unknown> | null> {
-  const raw = await chatLLM(system, messages, {
+  // rawChat, not chatLLM: the maths normalisation is for prose a student
+  // reads. Rewriting delimiters inside a JSON string value would corrupt it.
+  const raw = await rawChat(system, messages, {
     temperature: 0,
     maxTokens: 200,
     ...opts,

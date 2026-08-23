@@ -1,0 +1,8 @@
+{
+  "handout_id": "bad-missing-version",
+  "title": "Deliberately broken: missing-version",
+  "chapter": "GPT",
+  "term": "2026F",
+  "versions": ["A","B","C"],
+  "sections": ["intro"]
+}

@@ -5,18 +5,19 @@
 // the server broadcasts.
 //
 // Identity comes from the SERVER (Google sign-in via IAP in the cloud, a
-// dev identity locally) — this file never says who you are. `?role=admin`
-// only *requests* the admin role; the server grants it to the instructor
-// and ignores it for everyone else, so the answer to "am I admin" is
+// dev identity locally) — this file never says who you are, and since
+// 2026-08-22 it does not ask for a role either. The server derives both
+// from the ADMIN_EMAILS allowlist, so the answer to "am I admin" is
 // whatever came back in `init`, never the URL.
 //
 // Roles: "student" (you have an avatar) or "admin" (no avatar;
-// keyboard/mouse drive Terra; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
+// keyboard/mouse drive the TA; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
+// An instructor is ALWAYS the admin; there is no switch to a student view.
 //
 // Rendering: the entire static world (checkered floors, shaded walls,
 // furniture, door thresholds) is drawn once into a single baked texture —
 // zero per-frame cost; only the dozen avatar containers ever update. The
-// camera follows your avatar (or Terra for the admin) across the campus.
+// camera follows your avatar (or the TA for the admin) across the campus.
 
 import Phaser from "phaser";
 import { Client, Room } from "colyseus.js";
@@ -31,10 +32,9 @@ type RoomInfo = {
   y2: number;
   tint: string;
   kind: "office" | "special" | "commons";
-  forcedSkill?: string;
-  modeLabel?: string;
   hasBoard?: boolean;
   closed?: boolean;
+  soloOccupancy?: boolean;
 };
 type InitMsg = {
   tile: number;
@@ -43,17 +43,28 @@ type InitMsg = {
   rooms: RoomInfo[];
   you: string | null;
   role: "student" | "admin";
-  isAdmin: boolean; // may this account switch to admin at all?
+  isAdmin: boolean; // always equals (role === "admin") now; see MainRoom
   email: string;
   name: string;
   agents: { key: string; name: string }[];
+  // Boards the instructor may pin to. Deliberately not the same set as the
+  // rooms that display one — see MainRoom.
+  postTargets: { id: string; label: string }[];
+  shut: string[]; // solo-occupancy rooms currently taken
+  home: string | null; // your own room; null for the admin, who has no avatar
 };
 
 const params = new URLSearchParams(location.search);
-// What we ASK for. The server decides what we get (see `role` below).
-const WANT_ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
 // Local multi-user testing: ?as=ben@local. Ignored by the server behind IAP.
 const DEV_AS = params.get("as") || "";
+// Every HTTP call that depends on WHO is asking has to carry ?as= too. The
+// websocket gets it through devUser; fetch does not, and the Library shelf and
+// repo cards never needed it because they are the same list for everyone.
+// Handouts are not: without this, opening one while pretending to be a student
+// identifies as the dev user — who is the admin — and silently shows the
+// instructor's preview instead of that student's version. Empty behind IAP,
+// where identify() ignores it anyway.
+const AS_Q = DEV_AS ? `?as=${encodeURIComponent(DEV_AS)}` : "";
 // What we actually ARE — filled in from init, so it cannot be faked here.
 let role: "student" | "admin" = "student";
 
@@ -61,9 +72,23 @@ let room: Room;
 let init: InitMsg;
 let scene: WorldScene | null = null;
 let latestWorld: Entity[] = [];
+// Rooms that admit one person at a time and currently have someone inside.
+let shutRooms = new Set<string>();
 
-const TERRA_ID = "agent-terra";
-const followId = () => (role === "admin" ? TERRA_ID : init?.you);
+// The single door tile of a room — the one punched through its top wall.
+function doorOfRoom(r: RoomInfo): { x: number; y: number } | undefined {
+  return init?.doors.find((d) => d.x >= r.x1 && d.x <= r.x2 && Math.abs(d.y - r.y1) === 1);
+}
+
+// Am I (or, for the admin, the TA) inside this room? The occupant must not
+// be told their own door is shut, and must be able to walk back out.
+function insideRoom(r: RoomInfo): boolean {
+  const me = latestWorld.find((e) => e.id === followId());
+  return !!me && me.x >= r.x1 && me.x <= r.x2 && me.y >= r.y1 && me.y <= r.y2;
+}
+
+const TA_ID = "agent-ta";
+const followId = () => (role === "admin" ? TA_ID : init?.you);
 
 // ---------- color helpers ----------
 
@@ -84,10 +109,19 @@ function roomInfoAt(x: number, y: number): RoomInfo | undefined {
   return named ?? init?.rooms.find((r) => r.kind === "commons");
 }
 
+// "the Library" but "Sam's Office" — see MainRoom.roomPhrase, which must
+// agree with this. Office labels carry real display names now, so the
+// possessive is not always on the first token.
+function roomPhrase(roomId: string | null): string {
+  const label = init?.rooms.find((r) => r.id === roomId)?.label;
+  if (!label) return "the world";
+  return /'s\s/.test(label) ? label : `the ${label}`;
+}
+
 function labelFor(e: Entity): string {
-  if (e.kind !== "agent") return e.name;
-  const mode = e.id === TERRA_ID ? roomInfoAt(e.x, e.y)?.modeLabel : undefined;
-  return `${e.name} 🤖${mode ? ` · ${mode}` : ""}`;
+  // The TA used to carry a mode label here, set by whichever room they were
+  // standing in. They no longer leave their office and no longer have modes.
+  return e.kind === "agent" ? `${e.name} 🤖` : e.name;
 }
 
 const MINI_W = 180; // minimap width in px
@@ -99,6 +133,7 @@ class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
   private roomLabels: Phaser.GameObjects.Text[] = [];
+  private doorMarks = new Map<string, Phaser.GameObjects.Text>();
   private miniCam!: Phaser.Cameras.Scene2D.Camera;
   private miniMarkers!: Phaser.GameObjects.Graphics;
   private miniZoom = 1;
@@ -131,6 +166,21 @@ class WorldScene extends Phaser.Scene {
       this.roomLabels.push(label);
     }
 
+    // A 🔒 over the door of each solo-occupancy room, shown while taken.
+    // Drawn as its own object rather than baked into the world texture,
+    // which is rendered once and cannot be re-tinted.
+    for (const r of init.rooms.filter((x) => x.soloOccupancy)) {
+      const d = doorOfRoom(r);
+      if (!d) continue;
+      const mark = this.add
+        .text((d.x + 0.5) * T, (d.y + 0.5) * T, "🔒", { fontSize: "16px" })
+        .setOrigin(0.5)
+        .setDepth(6)
+        .setVisible(false);
+      this.doorMarks.set(r.id, mark);
+    }
+    this.refreshDoors();
+
     // Camera roams the whole campus, following the focus avatar, zoomed in
     // to a room-scale view (the campus is much bigger than the viewport).
     this.cameras.main.setBounds(0, 0, W, H);
@@ -158,7 +208,7 @@ class WorldScene extends Phaser.Scene {
     frame.style.height = `${this.miniH + 4}px`;
     document.getElementById("game")!.appendChild(frame);
 
-    // Input: arrows / WASD step, click walks (server drives Terra for
+    // Input: arrows / WASD step, click walks (server drives the TA for
     // admin). Clicking or dragging ON the minimap pans the main view
     // instead; two-finger trackpad scroll pans too. Any own movement
     // snaps the camera back to following you.
@@ -178,6 +228,12 @@ class WorldScene extends Phaser.Scene {
       const target = roomInfoAt(tx, ty);
       if (target?.closed) {
         addMsg({ who: "system", text: `${target.label} is under construction — you can't go in yet.`, cls: "sys" });
+        return;
+      }
+      // The server refuses this too; saying so here saves the round trip
+      // and, more usefully, explains a click that would otherwise do nothing.
+      if (target && shutRooms.has(target.id) && !insideRoom(target)) {
+        addMsg({ who: "system", text: `${roomPhrase(target.id).replace(/^the /, "The ")} is occupied — one student at a time. Try again shortly.`, cls: "sys" });
         return;
       }
       if (idleParked) return;
@@ -200,6 +256,15 @@ class WorldScene extends Phaser.Scene {
   }
 
   // Draw floors, walls, doors, and furniture ONCE into a baked texture.
+  // Called on every change to the shut set, and once at scene creation.
+  refreshDoors() {
+    for (const [rid, mark] of this.doorMarks) mark.setVisible(shutRooms.has(rid));
+    init.rooms.forEach((r, i) => {
+      if (!r.soloOccupancy) return;
+      this.roomLabels[i]?.setText((shutRooms.has(r.id) ? "🔒 " : "") + r.label.toUpperCase());
+    });
+  }
+
   private drawWorld(T: number, W: number, H: number) {
     const g = this.add.graphics();
     const doorSet = new Set(init.doors.map((d) => `${d.x},${d.y}`));
@@ -291,6 +356,7 @@ class WorldScene extends Phaser.Scene {
         desk(r.x1 + 0.6, r.y1 + 0.6);
         chair(r.x1 + 1.4, r.y1 + 2.1);
         plant(r.x2 + 0.5, r.y1 + 0.6);
+        pinboard(r.x1 + 3.4, r.y1 + 3.6); // the announcements board
       } else if (r.id === "classroom") {
         g.fillStyle(0xdfe6f5, 0.85); // whiteboard along the top wall
         g.fillRect((r.x1 + 0.7) * T, r.y1 * T + 4, (r.x2 - r.x1 - 1.4) * T, T * 0.35);
@@ -457,7 +523,7 @@ class WorldScene extends Phaser.Scene {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function addMsg(opts: { who: string; text: string; room?: string; cls?: string; skill?: string }) {
+function addMsg(opts: { who: string; text: string; room?: string; cls?: string; skill?: string; sources?: string[] }) {
   const log = $<HTMLDivElement>("chat-log");
   const div = document.createElement("div");
   div.className = "msg " + (opts.cls || "");
@@ -477,9 +543,20 @@ function addMsg(opts: { who: string; text: string; room?: string; cls?: string; 
     tag.textContent = "via " + opts.skill;
     div.appendChild(tag);
   }
+  // Where the answer came from. The server reports this, so it is there
+  // whether or not the model remembered to say so in the text.
+  for (const src of opts.sources ?? []) {
+    const tag = document.createElement("span");
+    tag.className = "room-tag src-tag";
+    tag.textContent = "📄 " + src;
+    div.appendChild(tag);
+  }
   const body = document.createElement("span");
   body.className = "body";
-  body.textContent = opts.text;
+  // The TA brain writes light markdown, and it used to arrive here as literal
+  // ** and ` characters — which nobody noticed while the TA was a side show
+  // and everybody notices now that talking to them is the whole app.
+  body.innerHTML = renderRich(opts.text);
   div.appendChild(body);
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
@@ -498,23 +575,236 @@ function setAdminStatus(note: string, ok: boolean) {
   el.className = ok ? "ok" : "err";
 }
 
-// Escape, then turn bare URLs into links.
+// Escape FIRST, then re-introduce the handful of markers the TA brain uses.
+// Order matters: everything below operates on already-escaped text, so no
+// model output can inject markup, and the link pattern only ever matches
+// http(s), never javascript:.
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderRich(text: string): string {
-  const esc = escapeHtml(text);
-  return esc.replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  return escapeHtml(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+
+// The Library shelf. The list is the TA's own manifest, proxied by the space
+// (the TA's port is not reachable from a browser), so adding a reading to
+// manifest.json puts it on the shelf AND in the TA's answers in one step.
+// Fetched on each entry rather than cached for the session, so a reading the
+// instructor adds mid-class appears on the next visit rather than the next
+// reload.
+type ShelfItem = { id: string; title: string; link?: string; format: string };
+type AgendaRow = { iso: string; content: string; homework: string; topic: string; planned: boolean };
+
+// The next couple of sessions, in the panel. The whole agenda is one click
+// away on the shelf; this is the part a student wants on the way past — what
+// is next and whether anything is due. A session with nothing written against
+// it shows as scheduled-but-unplanned rather than being hidden: the date is
+// real even when the content has not been decided yet.
+async function renderUpNext() {
+  const box = $<HTMLDivElement>("upnext");
+  let rows: AgendaRow[];
+  try {
+    rows = ((await (await fetch("/api/agenda")).json()) as { rows?: AgendaRow[] }).rows ?? [];
+  } catch {
+    box.innerHTML = "";
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const next = rows.filter((r) => r.iso >= today).slice(0, 2);
+  box.innerHTML = "";
+  for (const r of next) {
+    const d = document.createElement("div");
+    d.className = "upnext-row" + (r.planned ? "" : " unplanned");
+    const when = new Date(`${r.iso}T00:00:00`).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    const what = r.planned ? r.content || r.topic : "not planned yet";
+    d.innerHTML =
+      `<span class="when">${escapeHtml(when)}</span><b>${escapeHtml(what)}</b>` +
+      (r.planned && r.homework && r.homework !== "-" ? ` — due: ${escapeHtml(r.homework)}` : "");
+    box.appendChild(d);
+  }
+}
+
+async function renderShelf(show: boolean) {
+  const wrap = $<HTMLDivElement>("shelf-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  void renderUpNext();
+  const list = $<HTMLDivElement>("shelf");
+  const note = (text: string) => {
+    list.innerHTML = "";
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = text;
+    list.appendChild(d);
+  };
+  if (!list.children.length) note("Fetching the reading list…");
+
+  let readings: ShelfItem[];
+  try {
+    const res = await fetch("/api/materials");
+    readings = ((await res.json()) as { readings?: ShelfItem[] }).readings ?? [];
+  } catch {
+    readings = [];
+    note("The reading list is unavailable right now.");
+    return;
+  }
+  if (!readings.length) {
+    note("No readings posted yet.");
+    return;
+  }
+  list.innerHTML = "";
+  for (const r of readings) {
+    const d = document.createElement("div");
+    d.className = "shelf-item";
+    // Opening and keeping are different wants. The title opens the reading;
+    // this saves the instructor's original file. A separate control because
+    // ?download=1 bypasses the markdown rendering — clicking the title and
+    // then "save page as" would save the app's HTML instead. First in the
+    // DOM so the float holds the top-right corner and a title that wraps to
+    // two lines flows around it, rather than pushing it onto the second.
+    const dl = document.createElement("a");
+    dl.className = "dl";
+    dl.href = `/api/materials/${encodeURIComponent(r.id)}/file?download=1`;
+    dl.setAttribute("download", "");
+    dl.title = `Download ${r.title}`;
+    dl.textContent = "↓";
+    d.appendChild(dl);
+    const a = document.createElement("a");
+    // Served by the space, which renders .md to HTML on the way out — a
+    // browser handed raw markdown shows source or offers a download.
+    a.href = `/api/materials/${encodeURIComponent(r.id)}/file`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = r.title;
+    d.appendChild(a);
+    const tag = document.createElement("span");
+    tag.className = "fmt";
+    tag.textContent = r.format || "file";
+    d.appendChild(tag);
+    list.appendChild(d);
+  }
+}
+
+// The Computer Lab's repo cards. Config on the server, not a pinned post,
+// so the list outlives a boards.json wipe. Same fetch-on-entry shape as the
+// shelf, and the same .shelf-item styling — two boards, one card idiom.
+type RepoCard = { name: string; description: string; url: string };
+
+async function renderRepos(show: boolean) {
+  const wrap = $<HTMLDivElement>("repos-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  const list = $<HTMLDivElement>("repos");
+  let repos: RepoCard[];
+  try {
+    repos = ((await (await fetch("/api/repos")).json()) as { repos?: RepoCard[] }).repos ?? [];
+  } catch {
+    repos = [];
+  }
+  list.innerHTML = "";
+  if (!repos.length) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = "No project repositories posted yet.";
+    list.appendChild(d);
+    return;
+  }
+  for (const r of repos) {
+    const d = document.createElement("div");
+    d.className = "shelf-item";
+    const a = document.createElement("a");
+    a.href = r.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = r.name;
+    d.appendChild(a);
+    if (r.description) {
+      const p = document.createElement("span");
+      p.className = "desc";
+      p.textContent = r.description;
+      d.appendChild(p);
+    }
+    list.appendChild(d);
+  }
+}
+
+// The student's own handouts, shown in their home room. Third use of the
+// fetch-on-entry idiom, after the Library shelf (2b) and the repo cards (3a):
+// no websocket message, no room state, no MainRoom involvement.
+//
+// Home room rather than "their office" on purpose. init.home is the Common
+// Area for anyone not yet on the roster, and that is exactly the person who
+// needs to be told why their links will not open — a panel that only appears
+// in an office they do not have would leave them with no signal at all.
+type HandoutCard = { id: string; title: string; chapter: string; term: string; sections: number; graded: number };
+
+async function renderHandouts(show: boolean) {
+  const wrap = $<HTMLDivElement>("handouts-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  const list = $<HTMLDivElement>("handouts");
+  let data: { handouts?: HandoutCard[]; note?: string };
+  try {
+    data = (await (await fetch(`/api/handouts${AS_Q}`)).json()) as { handouts?: HandoutCard[]; note?: string };
+  } catch {
+    data = {};
+  }
+  const handouts = data.handouts ?? [];
+  list.innerHTML = "";
+  if (data.note) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = data.note;
+    list.appendChild(d);
+  }
+  if (!handouts.length) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = "No handouts yet.";
+    list.appendChild(d);
+    return;
+  }
+  for (const h of handouts) {
+    const d = document.createElement("div");
+    d.className = "handout-item";
+    const a = document.createElement("a");
+    a.href = `/handout/${encodeURIComponent(h.id)}${AS_Q}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = h.title;
+    d.appendChild(a);
+    const p = document.createElement("span");
+    const done = h.graded >= h.sections;
+    p.className = "prog" + (done ? " done" : "");
+    p.textContent = done
+      ? `${h.chapter} · all ${h.sections} sections graded — thank you`
+      : `${h.chapter} · ${h.graded} of ${h.sections} sections graded`;
+    d.appendChild(p);
+    list.appendChild(d);
+  }
 }
 
 function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {
   const card = $<HTMLDivElement>("board-card");
   if (!msg.roomId) {
     card.style.display = "none";
+    void renderShelf(false);
+    void renderRepos(false);
+    void renderHandouts(false);
     return;
   }
   card.style.display = "block";
+  void renderShelf(msg.roomId === "library");
+  void renderRepos(msg.roomId === "computer-lab");
+  void renderHandouts(!!init?.home && msg.roomId === init.home);
   $<HTMLDivElement>("board-title").textContent = `📌 ${msg.room} board`;
   const list = $<HTMLDivElement>("board-list");
   list.innerHTML = "";
@@ -533,14 +823,10 @@ function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: 
   }
 }
 
-// Post preview: composed by the TA brain; editable; pinned on approval.
-// Module-level (not closed over wirePanel's locals) so it can be re-wired
-// onto a fresh Room after a reconnect.
-function showPreview(msg: { from: string; text: string; boards: { id: string; label: string }[]; suggested: string }) {
-  $<HTMLTextAreaElement>("preview-text").value = msg.text;
-  $<HTMLSelectElement>("board-sel").value = msg.suggested;
-  $<HTMLDivElement>("preview").style.display = "block";
-}
+// Board posting: the instructor's own text, pinned exactly as typed.
+type FeedItem = { id: string; by: string; text: string; ts: string };
+let adminFeeds: Record<string, FeedItem[]> = {};
+let onAdminFeeds: (() => void) | null = null;
 
 function chatMode(): "private" | "speak" {
   const el = document.querySelector<HTMLInputElement>('input[name="cmode"]:checked');
@@ -548,29 +834,14 @@ function chatMode(): "private" | "speak" {
 }
 
 function wirePanel() {
-  // Role switch: offered only to an instructor, so a student never sees a
-  // control they cannot use. (The server enforces this regardless.)
-  const roleSel = $<HTMLSelectElement>("role-sel");
-  const roleRow = roleSel.closest(".row") as HTMLDivElement | null;
-  if (init.isAdmin) {
-    roleSel.value = role;
-    roleSel.onchange = () => {
-      const q = new URLSearchParams(location.search);
-      if (roleSel.value === "admin") q.set("role", "admin");
-      else q.delete("role");
-      location.search = q.toString();
-    };
-  } else if (roleRow) {
-    roleRow.style.display = "none";
-  }
   $<HTMLDivElement>("role-sub").innerHTML =
     `You are <b>${escapeHtml(init.name)}</b> (${escapeHtml(init.email)}), a student.`;
   if (role === "admin") {
     $<HTMLDivElement>("role-sub").innerHTML =
-      "You are the <b>admin</b> — no avatar; your keyboard/mouse move <b>Terra</b>. Chat below is private to the TA or spoken as her.";
+      "You are the <b>admin</b> — no avatar. You <b>are</b> the TA, and the TA stays in the TA office. Chat below is private to the TA brain, or spoken aloud in the office.";
     $<HTMLDivElement>("admin").style.display = "block";
     $<HTMLDivElement>("chat-mode").style.display = "block";
-    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA privately, or speak as her (pick above)…";
+    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA brain privately, or speak aloud in the office (pick above)…";
   }
 
   const agentSel = $<HTMLSelectElement>("agent-sel");
@@ -581,21 +852,47 @@ function wirePanel() {
     agentSel.appendChild(o);
   }
   agentSel.value = "ta";
-  const destSel = $<HTMLSelectElement>("dest-sel");
-  for (const r of init.rooms) {
-    const o = document.createElement("option");
-    o.value = r.id;
-    o.textContent = r.label;
-    destSel.appendChild(o);
-  }
-  destSel.value = "commons";
+  // Post targets come from the server, not from `rooms.hasBoard`: all six
+  // offices display a board, and none of them is a place to post — they show
+  // the one class-wide feed.
   const boardSel = $<HTMLSelectElement>("board-sel");
-  for (const r of init.rooms.filter((r) => r.hasBoard)) {
+  for (const t of init.postTargets) {
     const o = document.createElement("option");
-    o.value = r.id;
-    o.textContent = r.label;
+    o.value = t.id;
+    o.textContent = t.label;
     boardSel.appendChild(o);
   }
+
+  // What is on each board the instructor can post to, so they can read back
+  // and unpin. Kept here rather than on the world map because the instructor
+  // has no avatar to walk to a board with.
+  const renderFeed = () => {
+    const box = $<HTMLDivElement>("post-feed");
+    box.innerHTML = "";
+    const items = adminFeeds[boardSel.value] || [];
+    if (!items.length) {
+      const d = document.createElement("div");
+      d.className = "feed-empty";
+      d.textContent = "Nothing pinned here yet.";
+      box.appendChild(d);
+      return;
+    }
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "feed-item";
+      const t = document.createElement("span");
+      t.textContent = item.text;
+      const x = document.createElement("button");
+      x.textContent = "✕";
+      x.title = "Unpin";
+      x.onclick = () => room.send("admin", { action: "unpin", board: boardSel.value, id: item.id });
+      row.append(t, x);
+      box.appendChild(row);
+    }
+  };
+  boardSel.onchange = renderFeed;
+  onAdminFeeds = renderFeed;
+  renderFeed();
 
   const send = () => {
     const input = $<HTMLInputElement>("chat-input");
@@ -612,30 +909,110 @@ function wirePanel() {
   $<HTMLButtonElement>("direct-send").onclick = () => {
     room.send("admin", { action: "direct", agent: agentSel.value, instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
   };
-  $<HTMLButtonElement>("compose-post").onclick = () => {
-    room.send("admin", { action: "compose", instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
-  };
-  $<HTMLButtonElement>("quick-paper").onclick = () => {
-    room.send("admin", {
-      action: "compose",
-      instruction:
-        "Share one interesting recent AI paper or piece of AI news for the class board. Give the title and a 2-3 sentence plain-language summary of why it matters for a course on LLM agents.",
-    });
-  };
-
-  $<HTMLButtonElement>("preview-send").onclick = () => {
-    const text = $<HTMLTextAreaElement>("preview-text").value.trim();
+  // Board posts are the instructor's own words — typed here, pinned as-is.
+  $<HTMLButtonElement>("post-send").onclick = () => {
+    const box = $<HTMLTextAreaElement>("post-text");
+    const text = box.value.trim();
     if (!text) return;
     room.send("admin", { action: "post", board: boardSel.value, text });
-    $<HTMLDivElement>("preview").style.display = "none";
-  };
-  $<HTMLButtonElement>("preview-discard").onclick = () => {
-    $<HTMLDivElement>("preview").style.display = "none";
-    setAdminStatus("Post discarded.", true);
+    box.value = "";
   };
 
-  $<HTMLButtonElement>("send-agent").onclick = () => {
-    room.send("admin", { action: "send", agent: agentSel.value, dest: destSel.value });
+  // Adding a reading, without a redeploy. The file goes to the space, which
+  // checks the uploader is the instructor and forwards it to the corpus; the
+  // TA picks it up on the next question and the Library shelf on the next
+  // visit. Sent as a raw body with the metadata in the query string — no
+  // multipart parser, no base64 round-trip.
+  $<HTMLButtonElement>("up-send").onclick = async () => {
+    const picker = $<HTMLInputElement>("up-file");
+    const file = picker.files?.[0];
+    if (!file) return setAdminStatus("Pick a file first.", false);
+    const titleBox = $<HTMLInputElement>("up-title");
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const title = titleBox.value.trim() || base;
+    // The id is derived, not asked for: it is a URL and a manifest key, not
+    // something the instructor should have to invent a convention for.
+    const id = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
+    const agenda = $<HTMLInputElement>("up-agenda").checked;
+    const qs = new URLSearchParams({ id, title, filename: file.name });
+    if (agenda) qs.set("agenda", "1");
+    setAdminStatus(`Uploading ${file.name}…`, true);
+    try {
+      const res = await fetch(`/api/materials?${qs}`, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: file,
+      });
+      const body = (await res.json()) as { ok: boolean; note: string };
+      setAdminStatus(body.note, body.ok);
+      if (body.ok) {
+        picker.value = "";
+        titleBox.value = "";
+        $<HTMLInputElement>("up-agenda").checked = false;
+      }
+    } catch {
+      setAdminStatus("The upload did not go through.", false);
+    }
+  };
+
+  // Handouts. Uploaded as one bundle rather than file by file: at six versions
+  // a handout is two dozen markdown files, and `npm run bundle:handout` has
+  // already validated them into a single JSON. The server validates again.
+  async function refreshHandoutAdmin() {
+    const box = $<HTMLDivElement>("hadmin-list");
+    let handouts: HandoutCard[] = [];
+    try {
+      handouts = ((await (await fetch(`/api/handouts${AS_Q}`)).json()) as { handouts?: HandoutCard[] }).handouts ?? [];
+    } catch {
+      /* leave the list as it was rather than blanking it on one bad fetch */
+      return;
+    }
+    box.innerHTML = "";
+    if (!handouts.length) {
+      const d = document.createElement("div");
+      d.className = "hadmin-row";
+      d.textContent = "Nothing uploaded yet.";
+      box.appendChild(d);
+      return;
+    }
+    for (const h of handouts) {
+      const d = document.createElement("div");
+      d.className = "hadmin-row";
+      const id = encodeURIComponent(h.id);
+      d.innerHTML =
+        `<b>${escapeHtml(h.title)}</b>` +
+        `<a href="/handout/${id}${AS_Q}" target="_blank" rel="noopener">preview</a>` +
+        `<a href="/admin/handouts/${id}${AS_Q}" target="_blank" rel="noopener">feedback</a>` +
+        `<span>${escapeHtml(h.chapter)} · ${h.sections} sections</span>`;
+      box.appendChild(d);
+    }
+  }
+  void refreshHandoutAdmin();
+
+  $<HTMLButtonElement>("ho-send").onclick = async () => {
+    const picker = $<HTMLInputElement>("ho-file");
+    const file = picker.files?.[0];
+    if (!file) return setAdminStatus("Pick a .handout.json bundle first.", false);
+    setAdminStatus(`Uploading ${file.name}…`, true);
+    try {
+      const res = await fetch(`/api/handouts${AS_Q}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: await file.text(),
+      });
+      const body = (await res.json()) as { ok: boolean; note?: string; handout_id?: string; sections?: number; versions?: number; problems?: string[] };
+      if (body.ok) {
+        setAdminStatus(`${body.handout_id}: ${body.sections} sections × ${body.versions} versions.`, true);
+        picker.value = "";
+        void refreshHandoutAdmin();
+      } else {
+        // The bundler's own messages, passed through — they name the file and
+        // the fault, which is the whole reason it refuses rather than warns.
+        setAdminStatus([body.note, ...(body.problems ?? [])].filter(Boolean).join(" "), false);
+      }
+    } catch {
+      setAdminStatus("The bundle did not go through.", false);
+    }
   };
 
   // Lecturer mic → class transcript in the TA brain (Chrome Web Speech).
@@ -689,8 +1066,7 @@ function wirePanel() {
 // ---------- boot ----------
 
 const JOIN_OPTS = () => ({
-  // We only ASK for admin; the server grants it to the instructor alone.
-  role: WANT_ROLE,
+  // No role is sent — it is derived server-side from the allowlist.
   // Local multi-user testing only — ignored behind IAP.
   ...(DEV_AS ? { devUser: DEV_AS } : {}),
 });
@@ -814,7 +1190,7 @@ function wireRoom(client: Client) {
     scene?.updateEntities(latestWorld);
   });
 
-  room.onMessage("chat", (msg: { from: string; id: string; kind: string; text: string; room: string; skill?: string }) => {
+  room.onMessage("chat", (msg: { from: string; id: string; kind: string; text: string; room: string; skill?: string; sources?: string[] }) => {
     typingFrom.delete(msg.from);
     renderTyping();
     const mine = msg.id === init?.you || msg.id === "admin";
@@ -823,11 +1199,25 @@ function wireRoom(client: Client) {
       text: msg.text,
       room: msg.room,
       skill: msg.skill,
+      sources: msg.sources,
       cls: (msg.room === "private" ? "private " : "") + (mine ? "me" : msg.kind === "agent" ? "agent" : ""),
     });
   });
 
   room.onMessage("board", renderBoard);
+  room.onMessage("adminFeeds", (msg: { feeds: Record<string, FeedItem[]> }) => {
+    adminFeeds = msg.feeds || {};
+    onAdminFeeds?.();
+  });
+
+  room.onMessage("notice", (msg: { text: string }) => {
+    addMsg({ who: "system", text: msg.text, cls: "sys" });
+  });
+
+  room.onMessage("doors", (msg: { shut: string[] }) => {
+    shutRooms = new Set(msg.shut);
+    scene?.refreshDoors();
+  });
 
   room.onMessage("typing", (msg: { name: string }) => {
     typingFrom.add(msg.name);
@@ -840,11 +1230,13 @@ function wireRoom(client: Client) {
 
   room.onMessage("adminAck", (msg: { ok: boolean; note: string }) => setAdminStatus(msg.note, msg.ok));
 
-  room.onMessage("postPreview", showPreview);
 
   room.onMessage("init", (msg: InitMsg) => {
     init = msg;
     role = msg.role;
+    // `doors` only fires on change, so the current state has to arrive here.
+    shutRooms = new Set(msg.shut ?? []);
+    scene?.refreshDoors();
     // A reconnect that had to fall back to a fresh join sends init again;
     // the panel and the game are already up, only `init` needed refreshing.
     if (booted) return;
@@ -854,8 +1246,8 @@ function wireRoom(client: Client) {
       who: "system",
       text:
         role === "admin"
-          ? "Connected as admin. You're driving Terra — walk her somewhere and talk to her below."
-          : "Connected. You're in your office — walk out through the door to the halls.",
+          ? "Connected as admin. The TA waits in the TA office for students to walk in."
+          : `Connected. You're in ${roomPhrase(init.home)} — walk out through the door to the halls.`,
       cls: "sys",
     });
     new Phaser.Game({
@@ -868,9 +1260,11 @@ function wireRoom(client: Client) {
     });
   });
 
-  // Cloud Run terminates ANY connection at 60 minutes — a long class WILL
-  // be cut off — and laptops sleep. The server holds the seat open briefly
-  // (allowReconnection), so resume it if we can and take a fresh one if not.
+  // Cloud Run cuts every connection at the service's request timeout — a
+  // wall-clock limit, not an idle one, so heartbeats do not extend it and a
+  // long class WILL be interrupted. Laptops sleep too. The server holds the
+  // seat open briefly (allowReconnection), so resume it if we can and take a
+  // fresh one if not.
   const token = room.reconnectionToken;
   room.onLeave((code) => {
     if (leaving || code === 1000) return; // we closed it on purpose
@@ -899,7 +1293,37 @@ async function reconnect(client: Client, token: string) {
       // still down — back off and try again
     }
   }
+  // Out of retries. The likeliest cause is not a dead server but an expired
+  // IAP session: a browser cannot follow a 302 on a WebSocket upgrade, so
+  // IAP's redirect to the login page is invisible here and every attempt just
+  // fails. Only a full page load runs the sign-in round trip, and the socket
+  // closes with 1006 either way — indistinguishable from a real network drop.
+  // So reload rather than printing advice a student has to read and act on.
+  //
+  // Guarded, because if the server is genuinely down this would otherwise
+  // become a reload every ~75 seconds forever.
+  if (canAutoReload()) {
+    addMsg({ who: "system", text: "Session expired — reloading to sign in again…", cls: "sys" });
+    setTimeout(() => location.reload(), 1200); // let the message render
+    return;
+  }
   addMsg({ who: "system", text: "Couldn't reconnect. Reload the page to rejoin.", cls: "sys" });
+}
+
+// At most one automatic reload per RELOAD_COOLDOWN_MS, remembered for the tab
+// rather than the page, since the reload itself wipes everything else.
+const RELOAD_KEY = "vs.lastAutoReload";
+const RELOAD_COOLDOWN_MS = 5 * 60 * 1000;
+
+function canAutoReload(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+    if (Date.now() - last < RELOAD_COOLDOWN_MS) return false;
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return false; // private mode, storage disabled — never loop
+  }
 }
 
 main().catch((err) => {

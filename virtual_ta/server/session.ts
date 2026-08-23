@@ -19,6 +19,11 @@ export interface Session {
   history: ChatMessage[];
   readingId: string | null;
   transcript: string[];
+  // Course logistics the space knows and the brain does not: the instructor's
+  // announcements and the agenda. Set per request from the caller, never
+  // persisted and never rebuilt from the turn log — it is current state, not
+  // conversation history, and a stale deadline is worse than none.
+  bulletin: string | null;
   listening: boolean;
   startedAt: string;
 }
@@ -79,6 +84,7 @@ export function getSession(id: string): Session {
       history: [],
       readingId: null,
       transcript: [],
+      bulletin: null,
       listening: false,
       startedAt: new Date().toISOString(),
     };

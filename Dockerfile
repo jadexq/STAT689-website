@@ -25,7 +25,9 @@ RUN npm run --prefix virtual_space build:client
 
 # Neither server is compiled: the space runs TypeScript through tsx, the TA
 # through Node's own type stripping. tsx therefore survives the prune (it
-# is a runtime dependency); esbuild, phaser and typescript do not.
+# is a runtime dependency); esbuild, phaser, typescript and yaml do not.
+# phaser was in `dependencies` until 2026-08-23, so it survived the prune
+# and shipped several MB of unreachable browser code in the runtime image.
 RUN npm prune --omit=dev --prefix virtual_space \
  && npm prune --omit=dev --prefix virtual_ta
 

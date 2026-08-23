@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Virtual TA MVP — one unified chat box, an LLM intent router, four skills (coach / in-class / author / review) over a shared core. Runs entirely on the instructor's laptop.",
+  "description": "Virtual TA MVP \u2014 one unified chat box, an LLM intent router, four skills (coach / in-class / author / review) over a shared core. Runs entirely on the instructor's laptop.",
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch server/index.ts",
     "start": "node --env-file-if-exists=.env server/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:materials": "node --env-file-if-exists=.env scripts/materials-test.ts"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",

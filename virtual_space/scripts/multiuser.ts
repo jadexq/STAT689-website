@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 type Entity = { id: string; name: string; kind: string; x: number; y: number };
-type Init = { you: string | null; role: string; isAdmin: boolean; email: string; name: string; rooms: any[] };
+type Init = { you: string | null; role: string; isAdmin: boolean; email: string; name: string; rooms: any[]; home: string | null };
 
 const URL = process.env.VS_URL || "ws://localhost:2567";
 // Where the TA brain keeps one file per conversation (see virtual_ta/server/logger.ts).
@@ -49,6 +49,32 @@ async function waitUntil(cond: () => boolean, timeoutMs: number, label: string) 
   throw new Error(`TIMEOUT waiting for: ${label}`);
 }
 
+// The TA DROPS a message sent while busy: MainRoom.scheduleReplies
+// filters busy agents out of the reply set and agentRespond returns early.
+// That is deliberate, but it means a caller must RETRY — and it is why this
+// suite used to fail whenever it ran after smoke/integration, which leave
+// TA mid-LLM-call. Waiting longer cannot help: nothing is in flight to
+// wait for. So speak, wait a while, and speak again if nothing came back.
+async function sayUntilAnswered(j: Joined, text: string, who: string, budgetMs = 180_000) {
+  const mark = j.chats.length;
+  const heard = () => j.chats.slice(mark).some((c) => c.from === "TA");
+  const deadline = Date.now() + budgetMs;
+  let attempts = 0;
+  while (!heard() && Date.now() < deadline) {
+    attempts++;
+    j.room.send("chat", { text });
+    const until = Date.now() + 25_000;
+    while (!heard() && Date.now() < until) await wait(500);
+  }
+  if (!heard()) {
+    throw new Error(
+      `TIMEOUT: TA never answered ${who} across ${attempts} attempt(s) in ${budgetMs / 1000}s — ` +
+        `the TA may be stuck busy rather than merely slow`
+    );
+  }
+  console.log(`  ✓ TA answered ${who}${attempts > 1 ? ` (took ${attempts} attempts — the TA was busy)` : ""}`);
+}
+
 // The TA brain's filename transform for a session id.
 const logFileFor = (sessionId: string) =>
   path.join(TA_LOGS, `${sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)}.jsonl`);
@@ -59,10 +85,11 @@ interface Joined {
   world: Entity[];
   chats: any[];
   acks: { ok: boolean; note: string }[];
+  notices: { text: string }[];
 }
 
 async function join(client: Client, devUser: string, role?: "admin"): Promise<Joined> {
-  const j: Joined = { room: null as any, init: null, world: [], chats: [], acks: [] };
+  const j: Joined = { room: null as any, init: null, world: [], chats: [], acks: [], notices: [] };
   j.room = await client.joinOrCreate("main", { devUser, ...(role ? { role } : {}) });
   j.room.onMessage("init", (m: Init) => (j.init = m));
   j.room.onMessage("world", (m: { entities: Entity[] }) => (j.world = m.entities));
@@ -74,10 +101,13 @@ async function join(client: Client, devUser: string, role?: "admin"): Promise<Jo
   j.room.onMessage("adminAck", (m) => j.acks.push(m));
   j.room.onMessage("board", () => {});
   j.room.onMessage("typing", () => {});
-  j.room.onMessage("postPreview", () => {});
+  j.room.onMessage("notice", (m) => j.notices.push(m));
+  j.room.onMessage("doors", () => {});
   await waitUntil(() => !!j.init, 5000, `joined as ${devUser}${role ? ` (requesting ${role})` : ""}`);
   return j;
 }
+
+const spawnOfInit = (j: Joined, roomId: string) => j.init!.rooms.find((r: any) => r.id === roomId).spawn;
 
 async function main() {
   console.log(`Connecting to ${URL} …`);
@@ -86,6 +116,14 @@ async function main() {
   console.log("\n1. Two different people, two avatars");
   const ana = await join(client, "ana@local");
   const omar = await join(client, "omar@local");
+  // Everyone lands in their own room — the Common Area for an address that
+  // is not on the roster. The point is that two people never share a spawn
+  // tile just because the code had one hard-coded home for all humans.
+  for (const j of [ana, omar]) {
+    const sp = spawnOfInit(j, j.init!.home!);
+    const e = j.world.find((x) => x.id === j.init!.you)!;
+    assert(e.x === sp.x && e.y === sp.y, `${j.init!.name} spawned in their own room (${j.init!.home})`);
+  }
   const nameOf = (j: Joined) => j.world.find((e) => e.id === j.init!.you)?.name;
 
   // Counts are relative, not absolute: a seat is held for a couple of
@@ -96,7 +134,7 @@ async function main() {
     5000,
     "both humans are in the world"
   );
-  assert(ana.world.filter((e) => e.kind === "agent").length === 6, "6 agents (5 virtual students + Terra)");
+  assert(ana.world.filter((e) => e.kind === "agent").length === 6, "6 agents (5 virtual students + TA)");
   const afterTwo = ana.world.length;
   assert(ana.init!.email === "ana@local", "Ana's identity came from the server, not the client");
   assert(nameOf(ana) === "Ana" && nameOf(omar) === "Omar", "each has their own display name");
@@ -110,13 +148,12 @@ async function main() {
   assert(impostor.init!.isAdmin === false, "…and is not offered the role switch");
   assert(impostor.init!.you !== null, "…and gets an ordinary avatar");
   const spawn = (id: string) => ana.init!.rooms.find((r: any) => r.id === id).spawn;
-  const terraAt = () => ana.world.find((e) => e.id === "agent-terra")!;
-  impostor.room.send("admin", { action: "send", agent: "ta", dest: "commons" });
+  const taEnt = () => ana.world.find((e) => e.id === "agent-ta")!;
+  impostor.room.send("admin", { action: "direct", agent: "ta", instruction: "Say anything." });
   await waitUntil(() => impostor.acks.length > 0, 3000, "the server answered the admin command");
   assert(impostor.acks[0].ok === false, "…by refusing it");
-  await wait(500);
+  assert(/not on the instructor list/i.test(impostor.acks[0].note), "…for the right reason: not an admin");
   const c = spawn("commons");
-  assert(!(terraAt().x === c.x && terraAt().y === c.y), "Terra did not move");
 
   console.log("\n3. The instructor does get it");
   const jade = await join(client, "jade@local", "admin");
@@ -129,14 +166,16 @@ async function main() {
   );
 
   console.log("\n4. Chat still reaches only the same room");
-  ana.room.send("goto", spawn("commons"));
+  // Ana goes somewhere Omar is not. Which room does not matter; that they are
+  // apart does.
+  ana.room.send("goto", spawn("library"));
   await waitUntil(
-    () => { const e = ana.world.find((x) => x.id === ana.init!.you)!; return e.x === c.x && e.y === c.y; },
-    20000,
-    "Ana walked to the Common Area"
+    () => { const e = ana.world.find((x) => x.id === ana.init!.you)!; const l = spawn("library"); return e.x === l.x && e.y === l.y; },
+    25000,
+    "Ana walked to the Library"
   );
   const mark = ana.chats.length;
-  omar.room.send("chat", { text: "(Omar, alone in the office)" });
+  omar.room.send("chat", { text: "(Omar, elsewhere)" });
   await wait(1500);
   assert(ana.chats.length === mark, "Ana did not hear Omar from another room");
 
@@ -144,8 +183,8 @@ async function main() {
   // Each student's turns must land in their OWN file. Previously both were
   // "space:Jade" and their histories were interleaved into one conversation.
   //
-  // Sequentially, not together: Terra handles one caller at a time
-  // (AgentRuntime.busy), so a second message sent while she is thinking is
+  // Sequentially, not together: TA handles one caller at a time
+  // (AgentRuntime.busy), so a second message sent while the TA is thinking is
   // dropped by design — that is a queueing property, not an identity one.
   const files = ["space:ana@local", "space:omar@local"].map(logFileFor);
   for (const f of files) fs.rmSync(f, { force: true });
@@ -155,20 +194,40 @@ async function main() {
     return !!e && e.x >= ta.x1 && e.x <= ta.x2 && e.y >= ta.y1 && e.y <= ta.y2;
   };
 
+  // This suite used to have to WALK the TA home first: their position
+  // persisted between suites, so a TA left in someone else's office by an
+  // earlier run never answered here (open-issues A2). The TA cannot move
+  // any more, so there is nothing left to place — the assertion replaces
+  // ninety seconds of retrying.
+  const taAtHome = () => {
+    const t = ana.world.find((e) => e.id === "agent-ta");
+    return !!t && t.x >= ta.x1 && t.x <= ta.x2 && t.y >= ta.y1 && t.y <= ta.y2;
+  };
+  assert(taAtHome(), "the TA is in the TA office, as they always are");
+
   ana.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(ana), 30000, "Ana reached the TA office");
-  const benMark = ana.chats.length;
-  ana.room.send("chat", { text: "Hi Terra, this is Ana." });
-  await waitUntil(
-    () => ana.chats.slice(benMark).some((c) => c.from === "Terra"),
-    180000,
-    "Terra answered Ana (and is free again)"
-  );
+  await sayUntilAnswered(ana, "Hi TA, this is Ana.", "Ana");
   assert(fs.existsSync(files[0]), "Ana has a conversation file of their own");
 
+  console.log("\n6. One student at a time — the door is shut behind Ana");
+  const nMark = omar.notices.length;
   omar.room.send("goto", spawn("office-ta"));
-  await waitUntil(() => inTaOffice(omar), 30000, "Omar reached the TA office");
-  omar.room.send("chat", { text: "Hi Terra, this is Omar." });
+  await waitUntil(() => omar.notices.length > nMark, 8000, "Omar was told the door is shut");
+  assert(/occupied|shut/i.test(omar.notices[nMark].text), "…and told why, not silently ignored");
+  assert(/Ana/.test(omar.notices[nMark].text), "…and by whom");
+  await wait(1500);
+  assert(!inTaOffice(omar), "Omar did not get in while Ana was inside");
+
+  console.log("\n7. The door reopens when Ana leaves");
+  ana.room.send("goto", spawn(ana.init!.home ?? "commons"));
+  await waitUntil(() => !inTaOffice(ana), 30000, "Ana walked out");
+  omar.room.send("goto", spawn("office-ta"));
+  await waitUntil(() => inTaOffice(omar), 30000, "Omar got in once the office was free");
+  // No retry loop needed for busy-ness any more: with one visitor at a time
+  // the TA cannot be mid-answer for somebody else when Omar speaks. The
+  // helper stays because the TA can still be slow, not because messages drop.
+  await sayUntilAnswered(omar, "Hi TA, this is Omar.", "Omar");
   await waitUntil(() => fs.existsSync(files[1]), 60000, "Omar has a conversation file of their own");
 
   const anaLog = fs.readFileSync(files[0], "utf8");

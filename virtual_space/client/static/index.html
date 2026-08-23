@@ -64,6 +64,35 @@
   select:focus, textarea:focus, input:focus { border-color: var(--accent); }
 
   #board-card { display: none; }
+  #shelf-wrap { display: none; border-bottom: 1px solid var(--line); }
+  #shelf-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }
+  #shelf { padding: 4px 14px 12px; max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .shelf-item { background: #16281f; border: 1px solid #2c5443; border-radius: 10px; padding: 8px 11px; font-size: 13px; }
+  .shelf-item a { color: var(--ok); text-decoration: none; font-weight: 600; }
+  .shelf-item a:hover { text-decoration: underline; }
+  .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
+  /* Floated right so the title keeps the full row and long titles wrap under
+     it rather than pushing the save link off the card. */
+  .shelf-item .dl { float: right; color: var(--muted); font-weight: 700; text-decoration: none; padding: 0 2px; margin-left: 6px; }
+  .shelf-item .dl:hover { color: var(--ok); text-decoration: none; }
+  .shelf-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
+  #repos-wrap { display: none; border-bottom: 1px solid var(--line); }
+  #repos-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }
+  #repos { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .shelf-item .desc { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  #handouts-wrap { display: none; border-bottom: 1px solid var(--line); }
+  #handouts-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 700; }
+  #handouts { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .handout-item { background: #1e1a33; border: 1px solid #453a6e; border-radius: 10px; padding: 8px 11px; font-size: 13px; }
+  .handout-item a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .handout-item a:hover { text-decoration: underline; }
+  .handout-item .prog { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .handout-item .prog.done { color: var(--ok); }
+  #upnext { padding: 0 14px 8px; display: flex; flex-direction: column; gap: 6px; }
+  .upnext-row { font-size: 12.5px; color: var(--muted); }
+  .upnext-row b { color: var(--ink); font-weight: 600; }
+  .upnext-row .when { color: var(--ok); font-weight: 600; margin-right: 6px; }
+  .upnext-row.unplanned b { color: var(--muted); font-style: italic; font-weight: 400; }
   #board-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--warn); font-weight: 700; }
   #board-list { padding: 4px 14px 12px; max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .board-item { background: #2a2416; border: 1px solid #5a4a22; border-radius: 10px; padding: 8px 11px; font-size: 13px; white-space: pre-wrap; }
@@ -77,9 +106,12 @@
   .msg { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; }
   .msg .who { font-weight: 700; margin-right: 6px; }
   .msg .room-tag { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
+  .msg .src-tag { color: var(--warn); }
   .msg.me .who { color: var(--human); }
   .msg.agent .who { color: var(--ta); }
   .msg .body { display: block; margin-top: 2px; color: var(--ink); white-space: pre-wrap; }
+  .msg .body code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; font-size: 12.5px; }
+  .msg .body a { color: var(--accent); }
   .msg.private { border-color: #3d4f77; background: #1a2236; }
   .msg.sys { color: var(--muted); background: transparent; border-style: dashed; font-size: 12.5px; }
   #typing { padding: 0 14px 8px; color: var(--muted); font-size: 12px; font-style: italic; min-height: 20px; }
@@ -108,9 +140,29 @@
   #admin-status.err { color: #ff7a7a; }
   hr.sep { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
 
-  #preview { display: none; margin-top: 10px; border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
-  #preview .admin-title { color: var(--warn); margin-bottom: 6px; }
-  #preview-text { width: 100%; min-height: 90px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
+  #post-box { border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
+  #post-box .admin-title { color: var(--warn); margin-bottom: 6px; }
+  #post-feed { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
+  .feed-item { display: flex; gap: 8px; align-items: flex-start; background: #1f1b10; border: 1px solid #5a4a22; border-radius: 8px; padding: 6px 8px; font-size: 12.5px; }
+  .feed-item span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .feed-item button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .feed-item button:hover { color: #ff8fa3; }
+  .feed-empty { color: var(--muted); font-size: 12px; font-style: italic; }
+  #upload-box { border: 1px solid #2c5443; background: #16281f; border-radius: 10px; padding: 10px 12px; }
+  #upload-box .admin-title { color: var(--ok); margin-bottom: 8px; }
+  #hadmin-box .admin-title { color: var(--accent); margin-bottom: 8px; }
+  #hadmin-list { display: flex; flex-direction: column; gap: 7px; }
+  .hadmin-row { font-size: 12.5px; color: var(--muted); }
+  .hadmin-row b { display: block; color: var(--ink); font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .hadmin-row a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+  .hadmin-row span { white-space: nowrap; }
+  .hadmin-row a:hover { text-decoration: underline; }
+  #upload-box .row { margin-bottom: 8px; }
+  #upload-box .row:last-child { margin-bottom: 0; }
+  #upload-box input[type=file] { flex: 1; font-size: 12px; padding: 5px 7px; background: #10201a; border-color: #2c5443; }
+  #upload-box input[type=text], #up-title { background: #10201a; border-color: #2c5443; }
+  #upload-box label { flex: 1; color: var(--muted); font-size: 12px; }
+  #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
   #mic-toggle.on { background: #4d2020; border-color: #a04545; }
 </style>
 </head>
@@ -118,23 +170,38 @@
 <div id="app">
   <div id="game-col">
     <div id="game"></div>
-    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. Bottom rooms set Terra's mode: <b>Prep Room</b> (notes &amp; slides), <b>Library</b> (news, materials &amp; homework — 📌 board), <b>Computer Lab</b> (code review — 📌 board). The <b>Classroom</b> 🚧 is closed while it is being rebuilt.</div>
+    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. <b>To talk to the TA, walk into the TA Office</b> — one student at a time, so the door shuts while someone is in there. Your own room has a 📌 <b>announcements</b> board — that is where homework and notices from the instructor appear. The <b>Library</b> holds the 📚 course material — walk in and click a reading to open it. The <b>Library</b> and <b>Computer Lab</b> have 📌 boards of their own. The <b>Classroom</b> and <b>Prep Room</b> 🚧 are closed.</div>
   </div>
 
   <div id="side">
     <div class="card" id="side-head">
       Virtual Space — Course Campus
       <span class="sub" id="role-sub">You are <b>Jade</b>, a student.</span>
-      <div class="row">
-        <label for="role-sel">Role (testing)</label>
-        <select id="role-sel">
-          <option value="student">Student — Jade</option>
-          <option value="admin">Admin — control the TA</option>
-        </select>
-      </div>
     </div>
 
     <div class="card" id="board-card">
+      <!-- The Library's shelf: the course readings, as the TA's own corpus
+           reports them. It sits ABOVE the pinned posts, it does not replace
+           them — the Library is still somewhere the instructor pins to. -->
+      <div id="shelf-wrap">
+        <div id="shelf-title">📚 Course material</div>
+        <div id="upnext"></div>
+        <div id="shelf"></div>
+      </div>
+      <!-- The Computer Lab's repo cards. Same shelf idiom, different room:
+           a card per repository instead of a raw pasted link. -->
+      <div id="repos-wrap">
+        <div id="repos-title">💻 Project repositories</div>
+        <div id="repos"></div>
+      </div>
+      <!-- The student's own handouts, in the room they start and end up in.
+           Not a pinned post: boards.json holds the instructor's own words
+           under their signature, and the app announcing itself there would be
+           putting its wording in their mouth. -->
+      <div id="handouts-wrap">
+        <div id="handouts-title">📝 Handouts</div>
+        <div id="handouts"></div>
+      </div>
       <div id="board-title">📌 Board</div>
       <div id="board-list"></div>
     </div>
@@ -145,7 +212,7 @@
       <div id="typing"></div>
       <div id="chat-mode">
         <label><input type="radio" name="cmode" value="private" checked> 🔒 to TA (private)</label>
-        <label><input type="radio" name="cmode" value="speak"> 🗣 speak as TA (in her room)</label>
+        <label><input type="radio" name="cmode" value="speak"> 🗣 speak as the TA (in their room)</label>
       </div>
       <div id="chat-input-row">
         <input id="chat-input" placeholder="Say something (same-room chat)…" autocomplete="off">
@@ -162,29 +229,51 @@
       <textarea id="instruction" placeholder='e.g. "Post homework 1: read the attention paper, due Friday." or a link to share'></textarea>
       <div class="row btns">
         <button id="direct-send">🗣 Say in agent's room</button>
-        <button id="compose-post" class="primary">📌 Compose board post (TA)</button>
       </div>
-      <div class="row btns">
-        <button id="quick-paper">📌 TA: post an AI paper to the Library</button>
-      </div>
-      <div id="preview">
-        <div class="admin-title">📌 Post preview — not pinned yet (editable)</div>
-        <textarea id="preview-text"></textarea>
+      <hr class="sep">
+      <div id="post-box">
+        <div class="admin-title">📌 Pin to a board</div>
+        <textarea id="post-text" placeholder="Your own words — pinned exactly as written. e.g. a paper link and why it matters, or homework 1 due Friday."></textarea>
         <div class="row">
           <label for="board-sel">Board</label>
           <select id="board-sel"></select>
+          <button id="post-send" class="primary">Pin</button>
         </div>
-        <div class="row btns">
-          <button id="preview-send" class="primary">Pin to board</button>
-          <button id="preview-discard">Discard</button>
+        <!-- What is currently on the selected board. The instructor has no
+             avatar and cannot walk up to a board to read it back. -->
+        <div id="post-feed"></div>
+      </div>
+      <hr class="sep">
+      <!-- Adding a reading used to cost a container build. The file goes to
+           DATA_DIR, which survives a redeploy, and the TA indexes it on the
+           next question. -->
+      <div id="upload-box">
+        <div class="admin-title">📚 Add course material</div>
+        <div class="row">
+          <input type="file" id="up-file" accept=".md,.markdown,.html,.htm,.txt,.pdf">
+        </div>
+        <div class="row">
+          <input id="up-title" placeholder="Title students will see" style="flex:1">
+        </div>
+        <div class="row">
+          <label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="up-agenda" style="flex:0"> this is the course agenda
+          </label>
+          <button id="up-send" class="primary">Upload</button>
         </div>
       </div>
       <hr class="sep">
-      <div class="row">
-        <label for="dest-sel">Send to</label>
-        <select id="dest-sel"></select>
-        <button id="send-agent">Walk there</button>
+      <!-- Handouts are uploaded as one bundle (npm run bundle:handout), not
+           file by file: at six versions a handout is two dozen files. -->
+      <div id="hadmin-box">
+        <div class="admin-title">📝 Handouts</div>
+        <div class="row">
+          <input type="file" id="ho-file" accept=".json" style="flex:1">
+          <button id="ho-send" class="primary">Upload bundle</button>
+        </div>
+        <div id="hadmin-list"></div>
       </div>
+      <hr class="sep">
       <div class="row">
         <label>Lecture</label>
         <button id="mic-toggle">🎤 Mic: off</button>

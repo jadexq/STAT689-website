@@ -1,9 +1,12 @@
-// The AI inhabitants: five virtual students (thin local personas) and
-// Terra, the virtual TA (whose replies come from the Virtual TA brain —
-// see ta.ts / MainRoom). Per the v1 rules, agents only reply when spoken
-// to in their room or when the admin directs them — no autonomy.
+// The AI inhabitants: a stand-in for each unclaimed student character
+// (thin local personas, defined in roster.ts) and the TA, whose replies come
+// from the Virtual TA brain — see ta.ts / MainRoom.
+//
+// Agents never move and never speak unprompted: they reply when spoken to in
+// their own room, or when the instructor directs them.
 
 import { chatLLM } from "./llm";
+import { standInSlots } from "./roster";
 
 export interface AgentDef {
   id: string;
@@ -14,40 +17,29 @@ export interface AgentDef {
   persona: string;
 }
 
-const STUDENT_BASE =
-  "a virtual student enrolled in Jade Wang's flipped-classroom course on AI and large language model agents. " +
-  "Talk casually like a peer — never like an assistant. Ask questions, react, occasionally admit confusion.";
-
-// name, office, color, one-line personality
-const STUDENTS: [string, string, string, string][] = [
-  ["Sam",   "office-s1", "#ffb454", "You are a curious generalist who connects ideas across fields."],
-  ["Ben",   "office-s2", "#6fd08c", "You are the friendly skeptic — you ask for evidence and poke at hype."],
-  ["Chloe", "office-s3", "#f4d35e", "You are theory-minded and happiest when the math is on the table."],
-  ["Dev",   "office-s4", "#9ad1d4", "You are a systems person — GPUs, throughput, and inference costs excite you."],
-  ["Grace", "office-s5", "#ff8fa3", "You think like a product builder — you ask what users actually need."],
-];
-
 export const AGENTS: AgentDef[] = [
-  ...STUDENTS.map(([name, home, color, trait]) => ({
-    id: `agent-${name.toLowerCase()}`,
-    key: name.toLowerCase(),
-    name,
-    color,
-    home,
-    persona: `You are ${name}, ${STUDENT_BASE} ${trait}`,
+  // One per student character still played by a stand-in. A slot with a real
+  // address assigned has no agent: that office belongs to a person now.
+  ...standInSlots().map((s) => ({
+    id: `agent-${s.name.toLowerCase()}`,
+    key: s.name.toLowerCase(),
+    name: s.name,
+    color: s.color,
+    home: s.office,
+    persona: s.persona!,
   })),
   {
-    id: "agent-terra",
+    id: "agent-ta",
     key: "ta",
-    name: "Terra",
+    name: "TA",
     color: "#8f6fe8",
     home: "office-ta",
     persona:
-      "You are Terra, the virtual TA for Jade Wang's flipped-classroom course on AI and large language model agents. You are warm, encouraging, and knowledgeable.",
+      "You are the TA for Jade Wang's flipped-classroom course on AI and large language model agents. Students address you simply as \"TA\". You are warm, encouraging, and knowledgeable.",
   },
 ];
 
-export const TERRA_ID = "agent-terra";
+export const TA_ID = "agent-ta";
 
 const COMMON_RULES =
   "You are an avatar inside a small 2D virtual campus (student offices, a common area, a classroom, a prep room, a library, and a computer lab). " +

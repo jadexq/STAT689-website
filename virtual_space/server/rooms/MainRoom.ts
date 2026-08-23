@@ -9,26 +9,50 @@
 //
 // Roles:
 //   student — has an avatar; normal chat & movement.
-//   admin   — NO avatar; keyboard/mouse drive Terra; chat is either
-//             🔒 private to the TA brain or 🗣 spoken aloud as Terra.
-//             Admin-only: direct agents, compose/post board items, mic.
-//             Requested by the client, GRANTED only to an allowlisted
-//             instructor — a student asking for it just gets an avatar.
+//   admin   — NO avatar; chat is either 🔒 private to the TA brain or
+//             🗣 spoken aloud as the TA, in the TA office. Admin-only:
+//             direct agents, pin board posts, mic.
+//             Determined by the ADMIN_EMAILS allowlist ALONE: an instructor
+//             IS the TA, with no student view to switch to. The client has
+//             no say — a student asking for admin just gets an avatar.
 //
-// Terra's replies come from the Virtual TA brain (ta.ts) with one session
-// per student; the room she stands in can force a skill. Board posts are
-// composed by the announce skill, previewed to the admin, and pinned to a
-// room's board — students see the board when they walk in (no global
-// fan-out anymore).
+// THE TA DOES NOT MOVE. Not for students, not for the instructor. Every
+// conversation with the TA therefore happens in the TA office, which a
+// student has to walk into. The instructor drove the TA around until now,
+// so this also pins the instructor in place — accepted deliberately: a
+// rule that holds only when nobody is looking is not a rule, and the two
+// features that depend on it (walk-in access, one student at a time) both
+// collapse without it. See plan/app-changes.md, 2026-08-22.
+//
+// The TA office is a 1:1 room: one student, the TA, nobody else. The
+// solo-occupancy count deliberately ignores agents (the TA lives there and
+// must not block themself), so keeping the virtual students out is a
+// separate rule — enforced on the way in, and again on who may reply.
+//
+// ONE STUDENT AT A TIME. The TA office admits a single human; the door
+// shuts behind them and the next student has to wait. The TA already served
+// one caller at a time (AgentRuntime.busy) — the queue existed, it was just
+// invisible, and a second student's message vanished into it (open-issues
+// E2). This moves the wait to the threshold, where it can be explained.
+//
+// The TA's replies come from the Virtual TA brain (ta.ts), one session per
+// student. Board posts are written by the instructor and pinned to a
+// room's board — students see the board when they walk in.
 
 import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
-import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, forcedSkillAt, findPath } from "../map";
-import { AGENTS, TERRA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
+import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, doorOf, findPath,
+  ANNOUNCEMENTS,
+  boardFeedOf,
+  POST_TARGETS,
+} from "../map";
+import type { RoomDef } from "../map";
+import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
-import { getBoard, postToBoard } from "../boards";
+import { getBoard, postToBoard, removeFromBoard } from "../boards";
 import { logEvent } from "../logger";
 import { identify, type Identity } from "../identity";
+import { homeRoomFor, UNASSIGNED_ROOM } from "../roster";
 
 export interface Entity {
   id: string;
@@ -53,11 +77,33 @@ interface Sender {
 }
 
 const HISTORY_LIMIT = 30;
-const MAX_STUDENT_REPLIES = 2; // per human message — Terra is exempt
+const MAX_STUDENT_REPLIES = 2; // per human message — the TA is exempt
 // Cloud Run cuts every connection at 60 minutes and laptops sleep, so a
 // dropped socket is routine, not a departure. Hold the seat — and the
 // avatar, exactly where it was standing — for this long before cleaning up.
 const RECONNECT_WINDOW_S = 120;
+// A student who stops talking is sent back to their office, freeing the TA
+// for whoever is waiting. Without this the door above is a lockout bug: a
+// closed laptop lid holds the only way in indefinitely. Warn first, so
+// nobody is teleported mid-thought — typing anything resets the clock.
+//
+// Distinct from the CLIENT's 15-minute idle park (main.ts IDLE_MS), which
+// closes the socket to stop burning a Cloud Run connection. This one is
+// about fairness inside one room, so it is much shorter.
+const BULLETIN_ITEMS = 10;
+const BULLETIN_CHARS = 1_500;
+
+const SOLO_WARN_MS = Number(process.env.SOLO_WARN_S || 4 * 60) * 1000;
+const SOLO_IDLE_MS = Number(process.env.SOLO_IDLE_S || 5 * 60) * 1000;
+const SOLO_SWEEP_MS = 5_000;
+// Everywhere else, a student who has done nothing at all — not moved, not
+// spoken — is walked back to their own office. Longer and gentler than the
+// solo rule above, because standing idle in the hall costs nobody anything;
+// this is about the world tidying itself, not about fairness.
+//
+// Shorter than the CLIENT's 15-minute idle park (main.ts IDLE_MS), so a
+// student who wanders off is put away before their socket is.
+const HOME_IDLE_MS = Number(process.env.HOME_IDLE_S || 10 * 60) * 1000;
 const TA_OFFLINE_MSG =
   "(my TA brain isn't reachable — is the Virtual TA server running? `npm run dev` in virtual_ta)";
 
@@ -70,6 +116,10 @@ export class MainRoom extends Room {
   private history = new Map<string, HistoryEntry[]>(); // per map-room chat log
   private walkers = new Map<string, { clear: () => void }>(); // entity id -> active walk
   private lastRoom = new Map<string, string | null>(); // client -> room of their focus entity
+  private soloRooms = ROOMS.filter((r) => r.soloOccupancy);
+  private lastShut = ""; // last broadcast door state, to avoid re-sending it
+  private soloIdle = new Map<string, { last: number; warned: boolean }>();
+  private lastOp = new Map<string, number>(); // any operation: move or speak
 
   onCreate() {
     this.autoDispose = false;
@@ -95,6 +145,8 @@ export class MainRoom extends Room {
     this.onMessage("admin", (client, msg) => this.handleAdmin(client, msg));
     this.onMessage("mic", (client, msg) => this.handleMic(client, msg));
 
+    this.clock.setInterval(() => this.sweepSoloRooms(), SOLO_SWEEP_MS);
+
     logEvent("server_start", { agents: this.agents.map((a) => a.name) });
   }
 
@@ -102,16 +154,20 @@ export class MainRoom extends Room {
   // which is the correct outcome when we are behind IAP and no verified
   // identity arrived. `request` carries the IAP header on the WebSocket
   // upgrade; `options.devUser` is honoured only outside IAP.
-  onAuth(_client: Client, options: any, request?: IncomingMessage): Identity {
+  async onAuth(_client: Client, options: any, request?: IncomingMessage): Promise<Identity> {
     return identify(request, options?.devUser);
   }
 
-  onJoin(client: Client, options: any, auth?: Identity) {
+  onJoin(client: Client, _options: any, auth?: Identity) {
     const id = auth ?? (client.auth as Identity);
     this.identities.set(client.sessionId, id);
 
-    // The admin role is requested by the client and granted by us.
-    const isAdmin = id.isAdmin && options?.role === "admin";
+    // The role follows from the allowlist, not from anything the client
+    // asked for. Being unconditional is the point: the old default was
+    // "student", so the *instructor* experience was the one you had to
+    // remember to request, and board posting looked broken when you had
+    // not. A mode you can enter by accident will be entered by accident.
+    const isAdmin = id.isAdmin;
     if (isAdmin) {
       this.admins.add(client.sessionId);
       logEvent("join", { who: id.email, id: client.sessionId, role: "admin" });
@@ -126,7 +182,15 @@ export class MainRoom extends Room {
           this.lastRoom.delete(sid);
         }
       }
-      const home = roomById("office-jade")!;
+      const home = roomById(homeRoomFor(id.email))!;
+      if (home.id === UNASSIGNED_ROOM) {
+        // Not on the roster. They still get in — refusing a student at class
+        // time over a config gap is the wrong failure — but they land in the
+        // hall rather than in somebody else's office, and the address is
+        // logged so it can be assigned.
+        console.warn(`[roster] ${id.email} has no student slot — spawning in ${home.label}. Add it to STUDENTS.`);
+      }
+      this.lastOp.set(client.sessionId, Date.now());
       const p: Entity = {
         id: client.sessionId,
         name: id.name,
@@ -143,19 +207,42 @@ export class MainRoom extends Room {
       map: MAP,
       doors: DOORS,
       rooms: ROOMS,
+      // Where the instructor may pin. Not derivable from `rooms` on the
+      // client: every office displays a board but none is a post target.
+      postTargets: POST_TARGETS,
       you: isAdmin ? null : client.sessionId,
       role: isAdmin ? "admin" : "student",
-      // So the client knows whether to offer the role switch at all.
+      // Redundant with `role` now that the two always agree, but kept as
+      // the client-facing proof that asking for admin got an impostor
+      // nothing — scripts/multiuser.ts asserts this is false for them.
       isAdmin: id.isAdmin,
       email: id.email,
       name: id.name,
       agents: AGENTS.map((a) => ({ key: a.key, name: a.name })),
+      // Where this person starts and is returned to when idle. The Common
+      // Area when they are not on the roster.
+      home: isAdmin ? null : homeRoomFor(id.email),
+      // Current state, because `doors` is only broadcast on change.
+      shut: this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id),
     });
+    if (isAdmin) this.sendAdminFeeds(client);
     this.broadcastWorld();
   }
 
   async onLeave(client: Client, consented?: boolean) {
     const p = this.players.get(client.sessionId);
+    // Vacate a solo room IMMEDIATELY, before the reconnect hold. The seat is
+    // worth keeping for RECONNECT_WINDOW_S; the door is not — holding it for
+    // two minutes on every dropped laptop lid locks everyone else out for a
+    // person who is not there.
+    if (p && this.soloRooms.some((r) => roomAt(p.x, p.y) === r.id)) {
+      this.stopWalk(p.id);
+      const home = roomById(homeRoomFor(this.identities.get(client.sessionId)?.email || ""))!;
+      p.x = home.spawn.x;
+      p.y = home.spawn.y;
+      logEvent("solo_vacated", { who: p.name, reason: "disconnect" });
+      this.broadcastWorld();
+    }
     if (!consented) {
       try {
         await this.allowReconnection(client, RECONNECT_WINDOW_S);
@@ -171,22 +258,24 @@ export class MainRoom extends Room {
     this.admins.delete(client.sessionId);
     this.identities.delete(client.sessionId);
     this.lastRoom.delete(client.sessionId);
+    this.soloIdle.delete(client.sessionId);
+    this.lastOp.delete(client.sessionId);
     this.broadcastWorld();
   }
 
   // The entity a client's input drives / camera watches: their own avatar,
-  // or Terra for the admin.
+  // or the TA for the admin.
   private focusEntity(client: Client): Entity | undefined {
-    return this.players.get(client.sessionId) ?? (this.admins.has(client.sessionId) ? this.terra() : undefined);
+    return this.players.get(client.sessionId) ?? (this.admins.has(client.sessionId) ? this.ta() : undefined);
   }
 
-  private terra(): AgentRuntime {
-    return this.agents.find((a) => a.id === TERRA_ID)!;
+  private ta(): AgentRuntime {
+    return this.agents.find((a) => a.id === TA_ID)!;
   }
 
   // The TA brain keys conversations by this string, so it must be stable
   // across reconnects, restarts and cold starts — hence the email, not the
-  // Colyseus sessionId. The instructor's private line to Terra is a
+  // Colyseus sessionId. The instructor's private line to the TA is a
   // separate conversation from the same person's student-side chat.
   private taWho(client: Client, kind: "student" | "admin" = "student"): TaWho {
     const id = this.identities.get(client.sessionId);
@@ -203,13 +292,18 @@ export class MainRoom extends Room {
   private handleStep(client: Client, msg: any) {
     const e = this.focusEntity(client);
     if (!e) return;
+    if (this.refuseTAMove(client, e)) return;
     const dx = Math.sign(Number(msg?.dx) || 0);
     const dy = Math.sign(Number(msg?.dy) || 0);
     if (Math.abs(dx) + Math.abs(dy) !== 1) return;
+    this.lastOp.set(client.sessionId, Date.now());
     this.stopWalk(e.id);
     const nx = e.x + dx;
     const ny = e.y + dy;
     if (!walkable(nx, ny)) return;
+    if (this.blockedFor(e.id).has(`${nx},${ny}`)) {
+      return this.notice(client, this.shutMsg(roomAt(nx, ny) || "office-ta"));
+    }
     e.x = nx;
     e.y = ny;
     this.broadcastMove(e);
@@ -218,12 +312,140 @@ export class MainRoom extends Room {
   private handleGoto(client: Client, msg: any) {
     const e = this.focusEntity(client);
     if (!e) return;
+    if (this.refuseTAMove(client, e)) return;
     const tx = Math.floor(Number(msg?.x));
     const ty = Math.floor(Number(msg?.y));
     if (!walkable(tx, ty)) return;
-    const path = findPath({ x: e.x, y: e.y }, { x: tx, y: ty });
+    this.lastOp.set(client.sessionId, Date.now());
+    const blocked = this.blockedFor(e.id);
+    if (blocked.has(`${tx},${ty}`)) {
+      return this.notice(client, this.shutMsg(roomAt(tx, ty) || "office-ta"));
+    }
+    const path = findPath({ x: e.x, y: e.y }, { x: tx, y: ty }, blocked);
     if (!path || !path.length) return;
     this.walk(e, path, 130);
+  }
+
+  // ---------- solo-occupancy doors ----------
+
+  // Humans only. The TA lives in there, and a virtual student the instructor
+  // sends in is not a visitor queueing for the TA's attention.
+  private occupantOf(rid: string): Entity | undefined {
+    for (const p of this.players.values()) if (roomAt(p.x, p.y) === rid) return p;
+    return undefined;
+  }
+
+  // Tiles this player may not enter right now. The door alone would be
+  // enough today (it is the only way in), but blocking the interior too
+  // means the rule still holds if anything ever places an avatar directly.
+  private blockedFor(playerId: string): Set<string> {
+    const out = new Set<string>();
+    for (const r of this.soloRooms) {
+      const occ = this.occupantOf(r.id);
+      if (!occ || occ.id === playerId) continue; // free, or it is their own
+      const d = doorOf(r.id);
+      if (d) out.add(`${d.x},${d.y}`);
+      for (let y = r.y1; y <= r.y2; y++) for (let x = r.x1; x <= r.x2; x++) out.add(`${x},${y}`);
+    }
+    return out;
+  }
+
+  private shutMsg(rid: string): string {
+    const occ = this.occupantOf(rid);
+    const label = roomById(rid)?.label ?? rid;
+    return `The ${label} door is shut — ${occ ? occ.name : "someone"} is in with the TA. Try again in a few minutes.`;
+  }
+
+  // Broadcast only when the set of shut doors CHANGES. Movement is a delta
+  // for a reason (see broadcastMove); a per-step door frame would undo that.
+  private checkDoors() {
+    const shut = this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id);
+    const key = shut.join(",");
+    if (key === this.lastShut) return;
+    this.lastShut = key;
+    this.broadcast("doors", { shut });
+  }
+
+  private clientOf(entityId: string): Client | undefined {
+    return this.clients.find((c) => c.sessionId === entityId);
+  }
+
+  // Send an idle occupant home so the next student can get in.
+  private sweepSoloRooms() {
+    const now = Date.now();
+    const occupants = new Set<string>();
+    for (const r of this.soloRooms) {
+      const occ = this.occupantOf(r.id);
+      if (!occ) continue;
+      occupants.add(occ.id);
+      // First sight of them in here starts the clock — walking in counts as
+      // activity, so nobody is warned the instant they arrive.
+      const st = this.soloIdle.get(occ.id) ?? { last: now, warned: false };
+      this.soloIdle.set(occ.id, st);
+      const idle = now - st.last;
+      const c = this.clientOf(occ.id);
+      if (idle >= SOLO_IDLE_MS) {
+        this.soloIdle.delete(occ.id);
+        // Count the eviction as an operation, or the general sweep below
+        // fires on the same person mid-walk and sends a second notice.
+        this.lastOp.set(occ.id, now);
+        // Their OWN office, not a hardcoded one — open-issues.md E8, the
+        // call site E6 missed. Invisible while a single account holds a slot.
+        const home = roomById(homeRoomFor(this.identities.get(occ.id)?.email || ""))!;
+        const path = findPath({ x: occ.x, y: occ.y }, home.spawn);
+        if (c) this.notice(c, `You have been quiet for a while, so ${this.roomPhrase(r.id)} is being freed for the next student. Walk back in any time.`);
+        logEvent("solo_vacated", { who: occ.name, room: r.id, reason: "idle" });
+        if (path && path.length) this.walk(occ, path, 130);
+        else {
+          occ.x = home.spawn.x;
+          occ.y = home.spawn.y;
+          this.broadcastWorld();
+        }
+      } else if (idle >= SOLO_WARN_MS && !st.warned) {
+        st.warned = true;
+        const left = Math.max(1, Math.round((SOLO_IDLE_MS - idle) / 1000));
+        if (c) this.notice(c, `Still there? Say something in the next ${left}s or ${this.roomPhrase(r.id)} will be freed for the next student.`);
+      }
+    }
+    for (const id of [...this.soloIdle.keys()]) if (!occupants.has(id)) this.soloIdle.delete(id);
+
+    // Everyone else: idle anywhere but their own office, walk them home.
+    for (const [sid, p] of this.players) {
+      if (occupants.has(p.id)) continue; // the solo rule above owns them
+      if (this.walkers.has(p.id)) continue; // already on their way somewhere
+      const home = roomById(homeRoomFor(this.identities.get(sid)?.email || ""))!;
+      if (roomAt(p.x, p.y) === home.id) continue; // already home
+      if (now - (this.lastOp.get(sid) ?? now) < HOME_IDLE_MS) continue;
+      this.lastOp.set(sid, now); // don't re-fire while the walk is in progress
+      const c = this.clientOf(p.id);
+      if (c) this.notice(c, `Nothing has happened for a while — heading back to ${this.roomPhrase(home.id)}.`);
+      logEvent("sent_home", { who: p.name, from: roomAt(p.x, p.y), to: home.id });
+      const path = findPath({ x: p.x, y: p.y }, home.spawn);
+      if (path && path.length) this.walk(p, path, 130);
+    }
+  }
+
+  // The one place the "TA never moves" rule is enforced. Both movement
+  // handlers and the admin's "walk there" go through here, so a future
+  // caller that forgets is a compile-time miss, not a silent hole.
+  private refuseTAMove(client: Client, e: Entity): boolean {
+    if (e.id !== TA_ID) return false;
+    this.notice(client, "The TA stays in the TA office — walk in to talk to them.");
+    return true;
+  }
+
+  // "the Library" but "Sam's Office" — a possessive label already carries
+  // its article, and "the Sam's Office" reads like a machine wrote it. The
+  // possessive is not always on the first token: office labels are built from
+  // display names now, and a two-word name would otherwise produce "the
+  // Firstname Lastname's Office".
+  private roomPhrase(rid: string): string {
+    const label = roomById(rid)?.label ?? rid;
+    return /'s\s/.test(label) ? label : `the ${label}`;
+  }
+
+  private notice(client: Client, text: string) {
+    client.send("notice", { text });
   }
 
   private walk(entity: Entity, path: { x: number; y: number }[], stepMs: number) {
@@ -235,6 +457,14 @@ export class MainRoom extends Room {
         return;
       }
       const step = path[i++];
+      // Re-checked every step, not just at the start: the room can be
+      // claimed by someone closer while this walk is still in progress.
+      if (entity.kind === "human" && this.blockedFor(entity.id).has(`${step.x},${step.y}`)) {
+        this.stopWalk(entity.id);
+        const c = this.clientOf(entity.id);
+        if (c) this.notice(c, this.shutMsg(roomAt(step.x, step.y) || "office-ta"));
+        return;
+      }
       entity.x = step.x;
       entity.y = step.y;
       this.broadcastMove(entity);
@@ -253,13 +483,13 @@ export class MainRoom extends Room {
     const text = String(msg?.text || "").trim().slice(0, 500);
     if (!text) return;
 
-    // Admin chat: private line to the TA brain, or speak as Terra.
+    // Admin chat: private line to the TA brain, or speak as the TA.
     if (this.admins.has(client.sessionId)) {
       const mode = msg?.mode === "speak" ? "speak" : "private";
       if (mode === "private") {
         void this.adminPrivateChat(client, text);
       } else {
-        this.speakAsTerra(client, text);
+        this.speakAsTA(client, text);
       }
       return;
     }
@@ -267,20 +497,27 @@ export class MainRoom extends Room {
     const p = this.players.get(client.sessionId);
     if (!p) return;
     const rid = roomAt(p.x, p.y) || "commons";
+    // Speaking is what counts as being present — not moving. Someone
+    // reading a long answer is idle by the mouse's measure but not by the
+    // one that matters, which is why the warning comes first.
+    this.soloIdle.set(client.sessionId, { last: Date.now(), warned: false });
+    this.lastOp.set(client.sessionId, Date.now());
     this.pushHistory(rid, { name: p.name, text });
     this.deliverToRoom(rid, { from: p.name, id: p.id, kind: "human", text });
     logEvent("chat", { who: p.name, room: rid, text });
     this.scheduleReplies(rid, { name: p.name, text, who: this.taWho(client) });
   }
 
-  // Agents in the room reply: Terra always (the brain), then at most
+  // Agents in the room reply: the TA always (the brain), then at most
   // MAX_STUDENT_REPLIES virtual students — a room full of students must
   // not turn one "hello" into one LLM call per head.
   private scheduleReplies(rid: string, sender: Sender) {
-    const present = this.agents.filter((a) => roomAt(a.x, a.y) === rid && !a.busy);
-    const terra = present.find((a) => a.id === TERRA_ID);
-    const students = present.filter((a) => a.id !== TERRA_ID).slice(0, MAX_STUDENT_REPLIES);
-    const queue = terra ? [terra, ...students] : students;
+    const present = this.agents.filter(
+      (a) => roomAt(a.x, a.y) === rid && !a.busy && (a.id === TA_ID || !roomById(rid)?.soloOccupancy)
+    );
+    const ta = present.find((a) => a.id === TA_ID);
+    const students = present.filter((a) => a.id !== TA_ID).slice(0, MAX_STUDENT_REPLIES);
+    const queue = ta ? [ta, ...students] : students;
     queue.forEach((agent, i) => {
       this.clock.setTimeout(() => void this.agentRespond(agent, rid, sender), 300 + i * 1900);
     });
@@ -294,21 +531,27 @@ export class MainRoom extends Room {
     try {
       let text: string;
       let skill: string | undefined;
-      if (agent.id === TERRA_ID) {
-        // Terra answers with the real Virtual TA brain, one persistent TA
-        // session per student. The room she stands in may force a skill.
-        const forced = forcedSkillAt(agent.x, agent.y);
+      // Which course documents the answer was grounded in. Reported by the
+      // brain rather than asked of the model in prose: a citation the model
+      // has to remember to write is a citation it will sometimes skip.
+      let sources: string[] | undefined;
+      if (agent.id === TA_ID) {
+        // The TA answers with the real Virtual TA brain, one persistent TA
+        // session per student. No skill is forced from here any more — the
+        // brain has one skill, so there is nothing to choose.
         const who = sender.who ?? { sessionId: `space:${sender.name}`, email: "", name: sender.name };
-        const res = await taChat(who, sender.text, forced);
+        const res = await taChat(who, sender.text, this.bulletin());
         text = res.reply;
         skill = res.skill;
+        const src = (res.data as any)?.sources;
+        if (Array.isArray(src) && src.length) sources = src.map(String).slice(0, 3);
       } else {
         // Virtual students keep the thin local persona.
         const label = roomById(rid)!.label;
         text = await agentReply(agent.def, label, this.occupantNames(rid), this.history.get(rid) || []);
       }
       this.pushHistory(rid, { name: agent.name, text });
-      this.deliverToRoom(rid, { from: agent.name, id: agent.id, kind: "agent", text, skill });
+      this.deliverToRoom(rid, { from: agent.name, id: agent.id, kind: "agent", text, skill, sources });
       logEvent("chat", { who: agent.name, room: rid, text, agent: true, ...(skill ? { skill } : {}) });
     } catch (err: any) {
       logEvent("agent_error", { who: agent.name, error: String(err?.message || err) });
@@ -316,55 +559,69 @@ export class MainRoom extends Room {
         from: agent.name,
         id: agent.id,
         kind: "agent",
-        text: agent.id === TERRA_ID ? TA_OFFLINE_MSG : "(sorry — I couldn't reach my language model just now)",
+        text: agent.id === TA_ID ? TA_OFFLINE_MSG : "(sorry — I couldn't reach my language model just now)",
       });
     } finally {
       agent.busy = false;
     }
   }
 
-  // 🔒 Admin ↔ TA brain, visible only to the admin. Terra's room still
-  // forces the skill (e.g. stand her in the Prep Room and ask for notes).
+  // 🔒 Admin ↔ TA brain, visible only to the admin.
   private async adminPrivateChat(client: Client, text: string) {
-    const terra = this.terra();
-    client.send("chat", { from: "You → Terra", id: "admin", kind: "human", text, room: "private" });
-    logEvent("chat", { who: "admin", to: "Terra", text, private: true });
-    if (terra.busy) {
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: "(one moment — mid-conversation)", room: "private" });
+    const ta = this.ta();
+    client.send("chat", { from: "You → TA", id: "admin", kind: "human", text, room: "private" });
+    logEvent("chat", { who: "admin", to: "TA", text, private: true });
+    if (ta.busy) {
+      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: "(one moment — mid-conversation)", room: "private" });
       return;
     }
-    terra.busy = true;
-    client.send("typing", { name: terra.name });
+    ta.busy = true;
+    client.send("typing", { name: ta.name });
     try {
-      const forced = forcedSkillAt(terra.x, terra.y);
-      const res = await taChat(this.taWho(client, "admin"), text, forced);
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
-      logEvent("chat", { who: terra.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
+      const res = await taChat(this.taWho(client, "admin"), text, this.bulletin());
+      const src = (res.data as any)?.sources;
+      client.send("chat", {
+        from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private",
+        ...(Array.isArray(src) && src.length ? { sources: src.map(String).slice(0, 3) } : {}),
+      });
+      logEvent("chat", { who: ta.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
-      logEvent("agent_error", { who: terra.name, error: String(err?.message || err) });
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: TA_OFFLINE_MSG, room: "private" });
+      logEvent("agent_error", { who: ta.name, error: String(err?.message || err) });
+      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: TA_OFFLINE_MSG, room: "private" });
     } finally {
-      terra.busy = false;
+      ta.busy = false;
     }
   }
 
-  // 🗣 The admin's words come out of Terra, verbatim, in her current room.
-  // Virtual students there may respond (it's a human-driven message).
-  private speakAsTerra(client: Client, text: string) {
-    const terra = this.terra();
-    const rid = roomAt(terra.x, terra.y) || "commons";
-    this.pushHistory(rid, { name: terra.name, text });
-    this.deliverToRoom(rid, { from: terra.name, id: terra.id, kind: "agent", text });
-    logEvent("chat", { who: terra.name, room: rid, text, agent: true, spokenByAdmin: true });
-    const students = this.agents
-      .filter((a) => a.id !== TERRA_ID && roomAt(a.x, a.y) === rid && !a.busy)
-      .slice(0, MAX_STUDENT_REPLIES);
+  // 🗣 The admin's words come out of the TA, verbatim, in the TA office —
+  // which is where any student talking to the TA already is.
+  private speakAsTA(client: Client, text: string) {
+    const ta = this.ta();
+    const rid = roomAt(ta.x, ta.y) || "commons";
+    this.pushHistory(rid, { name: ta.name, text });
+    this.deliverToRoom(rid, { from: ta.name, id: ta.id, kind: "agent", text });
+    logEvent("chat", { who: ta.name, room: rid, text, agent: true, spokenByAdmin: true });
+    const students = roomById(rid)?.soloOccupancy
+      ? [] // a 1:1 room stays 1:1 even when the instructor is the one talking
+      : this.agents
+          .filter((a) => a.id !== TA_ID && roomAt(a.x, a.y) === rid && !a.busy)
+          .slice(0, MAX_STUDENT_REPLIES);
     students.forEach((agent, i) => {
-      this.clock.setTimeout(() => void this.agentRespond(agent, rid, { name: terra.name, text }), 400 + i * 1900);
+      this.clock.setTimeout(() => void this.agentRespond(agent, rid, { name: ta.name, text }), 400 + i * 1900);
     });
   }
 
   // ---------- admin actions ----------
+
+  // Who a board post is signed by. Not the TA: the instructor types every
+  // post themselves, and a due date carries the instructor's authority, not
+  // an LLM's. Students have to be able to tell the two apart — that becomes
+  // load-bearing the first time the TA is confidently wrong about something.
+  private instructorSig(client: Client): string {
+    const id = this.identities.get(client.sessionId);
+    return `${id?.name || "The instructor"} · Instructor`;
+  }
+
 
   private async handleAdmin(client: Client, msg: any) {
     if (!this.admins.has(client.sessionId)) {
@@ -401,67 +658,63 @@ export class MainRoom extends Room {
       return;
     }
 
-    // Compose a board post via the announce skill; PREVIEW to the admin.
-    if (action === "compose") {
-      const terra = this.terra();
-      const instruction = String(msg?.instruction || "").trim().slice(0, 1000);
-      if (!instruction) return client.send("adminAck", { ok: false, note: "Write an instruction first." });
-      if (terra.busy) return client.send("adminAck", { ok: false, note: "Terra is busy — try again in a moment." });
-      terra.busy = true;
-      client.send("adminAck", { ok: true, note: "Terra is composing the post…" });
-      logEvent("admin_compose", { instruction });
-      try {
-        const res = await taChat(this.taWho(client, "admin"), instruction, "announce");
-        const text = String(res.data?.announcement || res.reply);
-        const boardsAvail = ROOMS.filter((r) => r.hasBoard).map((r) => ({ id: r.id, label: r.label }));
-        const terraRoom = roomAt(terra.x, terra.y);
-        const suggested = terraRoom && roomById(terraRoom)?.hasBoard ? terraRoom : "library";
-        client.send("postPreview", { from: terra.name, text, boards: boardsAvail, suggested });
-        client.send("adminAck", { ok: true, note: "Preview ready — edit if you like, pick a board, then post." });
-      } catch (err: any) {
-        logEvent("agent_error", { who: terra.name, error: String(err?.message || err) });
-        client.send("adminAck", { ok: false, note: "Terra's brain is unreachable — is the Virtual TA server running on port 3000?" });
-      } finally {
-        terra.busy = false;
-      }
-      return;
-    }
-
-    // Admin approved the preview: pin it to the chosen room's board.
+    // Pin the instructor's own text to a room's board. There is no compose
+    // step: the announce skill used to draft this, which meant a board post
+    // could not be made without an LLM round trip, and the wording was the
+    // model's rather than the instructor's. Typing it is faster and exact.
     if (action === "post") {
-      const boardRoom = roomById(String(msg?.board || ""));
+      const target = POST_TARGETS.find((t) => t.id === String(msg?.board || ""));
       const text = String(msg?.text || "").trim().slice(0, 4000);
-      if (!boardRoom?.hasBoard || !text) {
-        return client.send("adminAck", { ok: false, note: "Pick a board room and keep some text." });
+      if (!target || !text) {
+        return client.send("adminAck", { ok: false, note: "Pick a board and keep some text." });
       }
-      const item = postToBoard(boardRoom.id, this.terra().name, text);
-      logEvent("board_post", { room: boardRoom.id, by: item.by, text: item.text });
-      // Everyone currently in the room sees the board refresh + a notice.
-      this.sendBoardToRoomOccupants(boardRoom.id);
-      this.deliverToRoom(boardRoom.id, {
-        from: this.terra().name,
-        id: TERRA_ID,
-        kind: "agent",
-        text: `(pins a note to the ${boardRoom.label} board)`,
-      });
-      client.send("adminAck", { ok: true, note: `Posted to the ${boardRoom.label} board.` });
+      const item = postToBoard(target.id, this.instructorSig(client), text);
+      logEvent("board_post", { feed: target.id, by: item.by, text: item.text });
+      this.sendFeedToViewers(target.id);
+      this.sendAdminFeeds();
+      if (target.id === ANNOUNCEMENTS) {
+        // No in-room chat line here. The room version below speaks as the TA,
+        // who is standing in their office; an announcement lands in six rooms
+        // the TA is not in, so a notice is the honest form.
+        this.broadcast("notice", { text: "📣 New announcement — it is on your office board." });
+        client.send("adminAck", { ok: true, note: "Announced to all students." });
+      } else {
+        this.deliverToRoom(target.id, {
+          from: this.ta().name,
+          id: TA_ID,
+          kind: "agent",
+          // The TA is the only body in the room to narrate this, but the note
+          // is the instructor's — say whose it is rather than implying it.
+          text: `(pins a note from the instructor to the ${target.label} board)`,
+        });
+        client.send("adminAck", { ok: true, note: `Posted to the ${target.label} board.` });
+      }
       return;
     }
 
-    if (action === "send") {
-      const agent = this.agents.find((a) => a.def.key === msg?.agent);
-      const dest = roomById(String(msg?.dest || ""));
-      if (!agent || !dest) {
-        return client.send("adminAck", { ok: false, note: "Pick an agent and a destination room." });
+    if (action === "unpin") {
+      const target = POST_TARGETS.find((t) => t.id === String(msg?.board || ""));
+      const id = String(msg?.id || "");
+      if (!target || !removeFromBoard(target.id, id)) {
+        return client.send("adminAck", { ok: false, note: "Nothing to unpin — it may already be gone." });
       }
-      const path = findPath({ x: agent.x, y: agent.y }, dest.spawn);
-      if (!path) {
-        return client.send("adminAck", { ok: false, note: "No path there." });
-      }
-      logEvent("admin_send", { agent: agent.name, dest: dest.id });
-      this.walk(agent, path, 220);
-      client.send("adminAck", { ok: true, note: `${agent.name} is walking to the ${dest.label}.` });
+      logEvent("board_unpin", { feed: target.id, item: id });
+      this.sendFeedToViewers(target.id);
+      this.sendAdminFeeds();
+      client.send("adminAck", { ok: true, note: `Unpinned from ${target.label}.` });
+      return;
     }
+
+    // A stale client — or a stale test — should be told, not ignored. The
+    // "send an agent somewhere" action lived here until 2026-08-22.
+    client.send("adminAck", { ok: false, note: `Unknown admin action "${String(action).slice(0, 40)}".` });
+
+    // There is deliberately no "send an agent somewhere" action any more.
+    // Every character now stays in their own room: the TA because the office
+    // is where students come to them, the stand-ins because an agent left in
+    // the wrong room joins conversations it has no business in (open-issues
+    // E5) and nothing ever put it back. Directing one to SPEAK still works —
+    // it just speaks where it lives.
   }
 
   // ---------- lecturer mic → class transcript in the TA brain ----------
@@ -481,6 +734,22 @@ export class MainRoom extends Room {
 
   // ---------- boards ----------
 
+  // The announcements, as one block for the TA brain. Capped: this rides on
+  // every single student message, so an unbounded feed would quietly become
+  // the largest part of every prompt.
+  private bulletin(): string {
+    const lines: string[] = [];
+    let used = 0;
+    for (const item of getBoard(ANNOUNCEMENTS).slice(0, BULLETIN_ITEMS)) {
+      const line = `- (posted ${item.ts.slice(0, 10)}) ${item.text.replace(/\s+/g, " ")}`;
+      if (used + line.length > BULLETIN_CHARS) break;
+      lines.push(line);
+      used += line.length;
+    }
+    return lines.join("\n");
+  }
+
+
   // Whenever the world changes, tell any client whose focus entity entered
   // or left a board room what's pinned there.
   private checkBoards() {
@@ -491,22 +760,44 @@ export class MainRoom extends Room {
       if (this.lastRoom.get(c.sessionId) === rid) continue;
       this.lastRoom.set(c.sessionId, rid);
       const def = rid ? roomById(rid) : undefined;
-      if (def?.hasBoard) {
-        c.send("board", { roomId: def.id, room: def.label, items: getBoard(def.id) });
-      } else {
-        c.send("board", { roomId: null });
-      }
+      if (def?.hasBoard) this.sendBoard(c, def);
+      else c.send("board", { roomId: null });
     }
   }
 
-  private sendBoardToRoomOccupants(rid: string) {
-    const def = roomById(rid);
-    if (!def?.hasBoard) return;
+  private sendBoard(c: Client, def: RoomDef) {
+    const feed = boardFeedOf(def);
+    c.send("board", {
+      roomId: def.id,
+      // The office board is the class noticeboard, not Sam's noticeboard.
+      // Titling it with the room would suggest a per-student feed, which is
+      // exactly the design we did not build.
+      room: feed === ANNOUNCEMENTS ? "Announcements" : def.label,
+      items: getBoard(feed),
+    });
+  }
+
+  // The instructor's own view of the boards. They have no avatar — their keys
+  // drive the TA, who stands in an office with no board — so they can never
+  // walk up to a noticeboard and read it back. Without this they cannot see
+  // what they posted, and a typo in a due date would be permanent.
+  private sendAdminFeeds(only?: Client) {
+    const feeds: Record<string, unknown> = {};
+    for (const t of POST_TARGETS) feeds[t.id] = getBoard(t.id);
+    for (const c of only ? [only] : this.clients) {
+      if (this.admins.has(c.sessionId)) c.send("adminFeeds", { feeds });
+    }
+  }
+
+  // Refresh everyone currently looking at a feed. Keyed by feed rather than
+  // by room because one announcement is on show in six rooms at once.
+  private sendFeedToViewers(feed: string) {
     for (const c of this.clients) {
       const e = this.focusEntity(c);
-      if (e && roomAt(e.x, e.y) === rid) {
-        c.send("board", { roomId: def.id, room: def.label, items: getBoard(def.id) });
-      }
+      if (!e) continue;
+      const rid = roomAt(e.x, e.y);
+      const def = rid ? roomById(rid) : undefined;
+      if (def?.hasBoard && boardFeedOf(def) === feed) this.sendBoard(c, def);
     }
   }
 
@@ -520,6 +811,7 @@ export class MainRoom extends Room {
   private broadcastMove(entity: { id: string; x: number; y: number }) {
     this.broadcast("moved", { id: entity.id, x: entity.x, y: entity.y });
     this.checkBoards();
+    this.checkDoors();
   }
 
   private broadcastWorld() {
@@ -529,6 +821,7 @@ export class MainRoom extends Room {
     ];
     this.broadcast("world", { entities });
     this.checkBoards();
+    this.checkDoors();
   }
 
   private occupantNames(rid: string): string[] {
@@ -546,10 +839,10 @@ export class MainRoom extends Room {
   }
 
   // Send a chat payload to every client whose focus entity is in the room
-  // (the admin "hears" whatever room Terra is in).
+  // (the admin "hears" whatever room the TA is in).
   private deliverToRoom(
     rid: string,
-    payload: { from: string; id: string; kind: string; text: string; skill?: string }
+    payload: { from: string; id: string; kind: string; text: string; skill?: string; sources?: string[] }
   ) {
     const label = roomById(rid)?.label || rid;
     this.sendToRoomClients(rid, "chat", { ...payload, room: label });

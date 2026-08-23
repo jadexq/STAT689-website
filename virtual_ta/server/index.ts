@@ -8,7 +8,9 @@ import express from "express";
 import compression from "compression";
 import path from "node:path";
 import { llmInfo } from "./llm.ts";
-import { listReadings } from "./materials.ts";
+import { formatOf, listReadings, readingFile, saveUpload } from "./materials.ts";
+import { loadAgenda } from "./agenda.ts";
+import { startRepoSync } from "./repo.ts";
 import { OUTPUT_DIR } from "./paths.ts";
 import { appendClassTranscriptLine, initStorage, logTurn } from "./logger.ts";
 import {
@@ -20,7 +22,7 @@ import {
   type Session,
   type SkillName,
 } from "./session.ts";
-import { CLARIFY_REPLY, CLASSROOM_ENABLED, route } from "./router.ts";
+import { CLARIFY_REPLY, CLASSROOM_ENABLED, SINGLE_SKILL, route } from "./router.ts";
 import { coach } from "./skills/coach.ts";
 import { classroom } from "./skills/classroom.ts";
 import { author } from "./skills/author.ts";
@@ -51,7 +53,63 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/materials", async (_req, res) => {
   const readings = await listReadings();
-  res.json({ readings: readings.map(({ id, title, link }) => ({ id, title, link })) });
+  res.json({
+    readings: readings.map((r) => ({ id: r.id, title: r.title, link: r.link, format: formatOf(r) })),
+  });
+});
+
+// The bytes of one reading. This port binds to 127.0.0.1, so no browser
+// reaches it — the virtual space proxies this route and does the rendering,
+// because the space is the only process a student can talk to. `:id` is
+// looked up in the manifest rather than joined onto a path, so nothing here
+// widens the file-system surface that listReadings() already exposes.
+const MIME: Record<string, string> = {
+  md: "text/markdown; charset=utf-8",
+  markdown: "text/markdown; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  htm: "text/html; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  pdf: "application/pdf",
+};
+
+app.get("/api/materials/:id/file", async (req, res) => {
+  const found = await readingFile(String(req.params.id));
+  if (!found) {
+    res.status(404).json({ error: "no such reading" });
+    return;
+  }
+  res.setHeader("content-type", MIME[found.format] ?? "application/octet-stream");
+  res.send(found.bytes);
+});
+
+// Upload a reading. Metadata rides in the query string and the body is the
+// raw file, so no multipart parser and no base64 round-trip. Authorisation is
+// the virtual space's job — this port binds to 127.0.0.1 and the space checks
+// that the uploader is the instructor before forwarding.
+app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (req, res) => {
+  const q = req.query as Record<string, string | undefined>;
+  const result = await saveUpload({
+    id: String(q.id ?? ""),
+    title: String(q.title ?? ""),
+    filename: String(q.filename ?? ""),
+    link: q.link ? String(q.link) : undefined,
+    agenda: q.agenda === "1",
+    pinned: q.pinned === "1",
+    bytes: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+  });
+  res.status(result.ok ? 200 : 400).json(result);
+});
+
+// The schedule, parsed. Same proxy path as the readings: the space serves it
+// to the browser, and the TA reads it straight from the corpus for its own
+// prompt (see coach.ts) rather than being told it over the wire.
+app.get("/api/agenda", async (_req, res) => {
+  const agenda = await loadAgenda();
+  if (!agenda) {
+    res.json({ rows: [], problems: [] });
+    return;
+  }
+  res.json(agenda);
 });
 
 app.post("/api/listen", async (req, res) => {
@@ -77,7 +135,7 @@ app.post("/api/listen", async (req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { sessionId, message, readingId, skill: forcedSkill, who } = req.body ?? {};
+  const { sessionId, message, readingId, skill: forcedSkill, who, bulletin } = req.body ?? {};
   if (typeof sessionId !== "string" || typeof message !== "string" || !message.trim()) {
     res.status(400).json({ error: "sessionId and message required" });
     return;
@@ -87,15 +145,18 @@ app.post("/api/chat", async (req, res) => {
   const name = typeof who?.name === "string" ? who.name : null;
   const session = await ensureSession(sessionId);
   if (typeof readingId === "string" && readingId) session.readingId = readingId;
+  // Assigned unconditionally, so a caller that does not send one (the TA's
+  // own web client) clears the last caller's rather than inheriting it.
+  session.bulletin = typeof bulletin === "string" && bulletin.trim() ? bulletin.trim() : null;
 
   pushHistory(session, "user", message);
   await logTurn({ sessionId, email, name, role: "user", skill: session.mode, readingId: session.readingId, content: message });
 
-  // An explicit, valid skill (e.g. from the virtual space's room-based
-  // modes) bypasses the router; otherwise route as usual.
-  // A disabled skill must be unreachable over the wire too: the virtual
-  // space sends room-based modes, and a stale client could still name one.
+  // A caller may still name a skill over the wire, but not while the TA is
+  // pinned to one: honouring it would reopen by HTTP exactly the modes the
+  // app just retired. A disabled skill must be unreachable over the wire too.
   const forcedOk =
+    !SINGLE_SKILL &&
     typeof forcedSkill === "string" &&
     forcedSkill in skills &&
     (CLASSROOM_ENABLED || forcedSkill !== "classroom");
@@ -127,4 +188,7 @@ await initStorage();
 app.listen(PORT, "127.0.0.1", () => {
   const { provider, model } = llmInfo();
   console.log(`Virtual TA up — http://localhost:${PORT} (LLM: ${provider}/${model})`);
+  // Deliberately after listen() and deliberately unawaited: the class server
+  // must boot whether or not GitHub answers. See repo.ts.
+  startRepoSync();
 });

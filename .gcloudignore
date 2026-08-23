@@ -1,0 +1,50 @@
+# What does NOT get uploaded to Cloud Build by `gcloud run deploy --source`.
+#
+# Why this file exists: without it, gcloud INFERS exclusions from .gitignore.
+# That worked, but it meant the only thing keeping .env out of an upload was
+# implicit behaviour — too load-bearing for a secret to rely on.
+#
+# The trade: this file REPLACES that inference, so the list below must be
+# complete. Anything not excluded here IS uploaded, even if .gitignore covers
+# it. Add to both files when adding something that should stay local.
+#
+# Note this is NOT a copy of .dockerignore. That one excludes the Dockerfile
+# itself; Cloud Build needs it, so it must not be excluded here.
+
+# --- secrets and local state ---
+**/.env
+**/.env.*
+!**/.env.example
+.localdata/
+
+# --- reinstalled or regenerated inside the image ---
+# node_modules: `npm ci` runs in the build stage.
+# bundle.js:    `npm run build:client` runs in the build stage.
+**/node_modules/
+virtual_space/client/static/bundle.js
+**/dist/
+
+# --- local data, never part of a deploy ---
+# test_material/ is gitignored, but this file REPLACES that inference, so it
+# has to be named here too or its fixtures upload and bake into the image.
+test_material/
+**/data/
+**/output/
+**/*.jsonl
+**/*.log
+
+# --- working material that is not the application ---
+# ref/ is third-party (colleagues' syllabi, course handouts) and must not be
+# redistributed; user_requirements/ and plan/ are working documents.
+ref/
+user_requirements/
+improvements/
+**/docs/improvements/
+plan/
+
+# --- repo and OS noise ---
+.git/
+.gitignore
+.gcloudignore
+.dockerignore
+**/.DS_Store
