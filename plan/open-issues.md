@@ -396,7 +396,15 @@ Recorded so they are not rediscovered as if they were new problems.
   same order of time as one during activity. Not yet observed under `cpu-throttling: false`.
 
 ### D7. Verification artefacts are in the production bucket — WIPE BEFORE THE FIRST CLASS
-- [ ] **Open — action required, and the safe window is now closing**
+- [ ] **Still open, and the bucket now holds MORE than when this was written, not less.** Wiped
+  once on 2026-08-23 at 21:39Z, which cleared the probe logs and `<test-2>`'s responses. Since
+  then Stage 7 put three new things in: Tester's graded responses for `sample-attention`, the
+  `notation-note` test reading ("TEST — delete before class"), and fresh session logs. There is
+  no delete route for a reading or a handout ([E7](#e7)), so **the wipe is the only way to remove
+  them** — which means it has to happen after all remaining verification, not before.
+- **The mechanics have not changed and are the easy thing to get wrong:** confirm zero instances
+  first. `docker/sync.mjs` re-uploads the whole `DATA_DIR` tree whenever the newest mtime
+  advances, so a wipe against a warm container removes nothing.
 - The Phase C probes joined the real room as `iap-probe@stat689.iam.gserviceaccount.com`, so
   that identity appears in the session log inside `gs://stat689-data/state/current.tar.gz` and
   in `state/daily/2026-08-22.tar.gz`.
@@ -427,7 +435,16 @@ Recorded so they are not rediscovered as if they were new problems.
   space and the item is deliberately closed unexecuted.
 
 ### D8. `HANDOUT_SALT` is not set in Cloud Run
-- [ ] **Open. Blocks the first handout. One command, then write the value down.**
+- [x] **Resolved 2026-08-23.** Created as a Secret Manager secret `handout-salt`, granted to
+  `stat689-app@`, and passed by reference with `--set-secrets` rather than as an env var. Every
+  boot since prints `Handouts: HANDOUT_SALT set`.
+- **Verified stable, which matters more than verified present.** The response record written on
+  2026-08-23 hashes to `2152b290…`, byte-identical to the hash from before the bucket wipe, and
+  recomputing `sha256(salt + "jadewang@tamu.edu")` forward from the stored secret reproduces it.
+  A salt that silently changed would orphan every record while looking perfectly healthy, so this
+  is now checked rather than assumed. The value is always retrievable —
+  `gcloud secrets versions access latest --secret=handout-salt --project=stat689` — so there is
+  no reason to ever reissue it.
 - Student feedback is keyed by `sha256(HANDOUT_SALT + email)`. Behind IAP with no salt set, every
   handout route answers **503** and says why, and the rest of the campus is unaffected.
 
@@ -472,7 +489,10 @@ Recorded so they are not rediscovered as if they were new problems.
   PhD students who already know they are being read, it costs less candour than pretending would.
 
 ### D10. `test_material/` is gitignored but not in `.gcloudignore`, so it ships
-- [ ] **Open. Small, and the file it breaks exists to prevent exactly this.**
+- [x] **Resolved.** `.gcloudignore:30` now lists `test_material/`, with a comment recording *why*
+  the entry has to exist here as well — that this file replaces gcloud's inference from
+  `.gitignore` rather than adding to it. The directory does not currently exist in the tree, so
+  the entry is pre-emptive; that is the point, since the failure mode is silent.
 - `.gcloudignore`'s own header records why it exists: it **replaces** gcloud's inference from
   `.gitignore`, so "the list below must be complete. Anything not excluded here IS uploaded, even
   if .gitignore covers it."
@@ -489,7 +509,10 @@ Recorded so they are not rediscovered as if they were new problems.
 - Planned as [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15d item 1.
 
 ### D11. The Dockerfile says `phaser` does not survive the prune. It does.
-- [ ] **Open. Cosmetic in effect, misleading in a place people reason from.**
+- [x] **Resolved.** `docker/Dockerfile:28-29` no longer claims phaser is pruned as a matter of
+  course. It now names the dependency move and dates it — "phaser was in `dependencies` until
+  2026-08-23, so it survived the prune" — so the comment explains the history instead of
+  contradicting the manifest.
 - The build stage comments: "Both esbuild and phaser are build-time only — the browser gets the
   bundle", and "esbuild, phaser and typescript do not [survive the prune]".
 - But `phaser` is listed in **`dependencies`**, not `devDependencies`, so `npm prune --omit=dev`
@@ -679,7 +702,14 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   than *delete*. Not urgent, and not in step 4's scope.
 
 ### E8. E6 survives on one path — idle eviction from the TA office still hardcodes one office
-- [ ] **Open. One line. Reachable as soon as a second account holds a slot.**
+- [x] **Resolved, and the test that proves it was itself fixed on the way.** Stage 7 check 9
+  passed 2026-08-23 via `scripts/idle-test.ts`.
+- **The first assertion could not actually prove this.** Step 3 evicts `ana@local`, who holds no
+  slot, so her "own room" *is* the commons — that catches a hardcoded office but cannot tell
+  "their own office" apart from "the commons for everybody", which is the distinction E8 is
+  about. `59ff49d` adds step 6: it puts a *rostered* student in the TA office, idles them out,
+  and asserts they land on `office-s6` specifically. That is the call site E8 fixed, and it is
+  the only step that exercises it.
 - **E6** replaced `roomById("office-jade")` with `homeRoomFor(email)` as the home of a human, and
   is marked resolved. Three of the four sites were converted — `MainRoom.ts` lines 185, 240 and
   414. **Line 392 was missed**: when the TA office's occupant goes quiet, they are walked home to
