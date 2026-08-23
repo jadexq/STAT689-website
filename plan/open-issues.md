@@ -15,14 +15,21 @@ Last reviewed: **2026-08-22** (updated during the Phase C deploy)
 
 ---
 
-## A. Test failures — real, reproducible, pre-existing
+## A. Test failures
 
-Both were found while verifying the pre-Phase-C changes and both were reproduced on a clean
-checkout of `09f5e81`, so neither is a regression from that work. Neither was fixed at the time,
-because fixing tests inside an auth change is how you lose track of what broke what.
+A1 and A2 were found while verifying the pre-Phase-C changes and both were reproduced on a clean
+checkout of `09f5e81`, so neither was a regression from that work. Neither was fixed at the time,
+because fixing tests inside an auth change is how you lose track of what broke what. **Both were
+resolved on 2026-08-22 in `7eedc2a`** — see [`app-changes.md`](./app-changes.md) for the plan
+and what the diagnosis got wrong twice. A3 is new and still open.
 
 ### A1. `ghost-test.ts` asserts a stale entity count
-- [ ] **Open**
+- [x] **Resolved 2026-08-22, `7eedc2a`.** The absolute total was removed rather than corrected:
+  leftover avatars are seats inside their 120s reconnection window, not ghosts, so a suite that
+  fails on them asserts something untrue. It now asserts one avatar per identity (the real
+  ghost check, which already passed), exactly 6 agents, and no duplicate human names.
+  Green against a fresh server (7 entities) **and** as the fourth suite (9 entities) — two
+  different totals, which is the point.
 - **Symptom:** `GHOST TEST FAILED ❌: expected 12 entities, got 10` (and `got 7` at baseline).
 - **Cause:** the hardcoded `12` in `virtual_space/scripts/ghost-test.ts:37` was last touched in
   `fd767cb` and was never updated when `60c4e5f` reduced the virtual cast.
@@ -33,17 +40,52 @@ because fixing tests inside an auth change is how you lose track of what broke w
   fourth suite in a sequence.
 
 ### A2. `multiuser.ts` fails when it is not run first
-- [ ] **Open**
+- [x] **Resolved 2026-08-22, `7eedc2a`.**
 - **Symptom:** `TIMEOUT waiting for: Terra answered Ana (and is free again)`.
 - **Reproduction:** passes against a freshly started server; fails when run third, after `smoke`
   and `integration` have already queued LLM work through the same agent. Identical behaviour at
   baseline.
-- **Cause:** test isolation, not a product bug — Terra is still busy from the previous suites and
-  the wait for "free again" expires.
+- **Cause — and the first two diagnoses were both wrong, which is why this is written out.**
+  It is *not* that Terra is still busy and the wait expires (this entry's original claim), and
+  it is *not* that she silently drops messages while busy (the second guess, which led to a
+  retry that failed 8 times in 180s and thereby disproved itself). Busy-drop is real —
+  `scheduleReplies` filters busy agents out and `agentRespond` returns early — but it is not
+  what breaks this suite.
+  **The actual cause: Terra's position persists between suites and nothing sends her home.**
+  Her home is `office-ta`, but smoke and integration walk her elsewhere, and a suite that dies
+  mid-run leaves her stranded — she was found in Jade's Office at (39,6) while the TA office
+  spans y 14-19. `scheduleReplies` only picks agents whose room matches the speaker's, so Ana
+  was talking to an empty room. **No timeout and no retry count could ever have fixed that**,
+  which is the useful lesson: a wait that cannot succeed looks exactly like a wait that is too
+  short.
+- **Fix:** the suite now *places* Terra in the TA office via its own admin connection and waits
+  for her to arrive, retrying the send because it is refused while she is busy. It no longer
+  assumes where she is.
 - **Why it matters anyway:** a suite that only passes in one order will eventually be believed
   when it shouldn't be, and it masked whether the auth change had broken something. It cost real
   time today to prove it hadn't.
-- **Resolved when:** `smoke → integration → multiuser → ghost-test` passes end to end in one run.
+- **Verified:** `smoke → integration → multiuser → ghost-test` all green in one run from a
+  fresh server, with `✓ Terra is in the TA office (put there by this suite, not assumed)` and
+  both students answered on the first attempt.
+
+### A3. `integration.ts` step 6 failed once in two runs
+- [ ] **Open — intermittent, cause not established. Recorded rather than dismissed.**
+- **Symptom:** `TIMEOUT waiting for: Jade & Terra in the Computer Lab` (2026-08-22). The same
+  code passed on the run before and the run after, so it is intermittent, not broken.
+- **Not caused by the A1/A2 work**: those commits touch only `ghost-test.ts` and
+  `multiuser.ts` — no server code, no `integration.ts`.
+- **The fragile assertion** (`scripts/integration.ts:137`) waits up to 40s for
+  `at(me(), spawnOf("computer-lab")) && at(terra(), spawnOf("computer-lab"))` — i.e. for a
+  student **and** Terra to occupy the *same tile* at the same 200 ms poll. It also relies on a
+  single un-retried `admin send`, which the server refuses outright while Terra is busy
+  (`MainRoom.ts:390`). The adminAck in the failing run said she was walking, so the send was
+  accepted; beyond that the logs do not say which of the two never arrived.
+- **Do not "fix" this by raising the timeout** until the cause is known — A2 is the cautionary
+  tale: there, a wait that could never succeed was mistaken twice for a wait that was too short.
+- **Next step when it recurs:** log both positions on timeout so the failure names who was
+  missing, instead of only that the pair never met.
+- **Resolved when:** either it is reproduced and the cause fixed, or the sequence runs green
+  enough times to call the assertion sound. Neither is true yet at 1 failure in 2 runs.
 
 ---
 
@@ -353,6 +395,28 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   [`app-changes.md`](./app-changes.md), 2026-08-22 entry.
 - **Resolved when:** the TA pins a post to the Library board **in the deployed app**, a student
   walking in sees it, and it survives an instance restart.
+
+### E2. A student who messages Terra while she is busy gets silence
+- [ ] **Open — found 2026-08-22 while diagnosing A2. Not urgent today, likely visible in class.**
+- **Behaviour.** `MainRoom.scheduleReplies` (line 287) builds the reply set from
+  `agents.filter(a => ... && !a.busy)`, and `agentRespond` (line 297) returns early if the agent
+  is busy. So a message sent to Terra while she is mid-LLM-call is dropped: **no reply, no
+  acknowledgement, no typing indicator.** Nothing tells the student anything happened.
+- **The admin path already handles this.** `adminPrivateChat` (lines 339-341) answers
+  "(one moment — mid-conversation)" when Terra is busy. Only the student path is silent.
+- **Why it will show up.** Five students share one Terra, and each turn is one LLM call taking
+  seconds. Two students asking at once is not an edge case, it is a Tuesday. The failure looks
+  exactly like "the TA is broken", and the student's only recourse is to guess and retry.
+- **Not a regression.** Pre-existing; it simply had not been noticed because single-user testing
+  never contends for the agent.
+- **Options, cheapest first.** (a) mirror the admin courtesy line for students; (b) a typing/
+  busy indicator in the world state — `busy` is currently **not** exposed in `broadcastWorld`;
+  (c) queue one pending message per student. (a) is the smallest honest fix; (c) is the one that
+  actually matches what a student expects.
+- **Deliberately not fixed inside the A1/A2 test work** — a product change made inside a test
+  fix is how you lose track of what broke what.
+- **Resolved when:** a student messaging a busy Terra gets some visible response, and two
+  students asking at once both end up answered or both told to wait.
 
 ---
 

@@ -35,8 +35,8 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Make the test suites order-independent (A1, A2)
 
-**Status:** planned — awaiting review
-**Tracker:** resolves `open-issues.md` A1 and A2. Status gets ticked there, not here.
+**Status:** **shipped 2026-08-22** — `7eedc2a`, verified locally
+**Tracker:** resolved `open-issues.md` A1 and A2; opened A3 and E2 along the way.
 
 ### Why now, before the next batch of changes
 
@@ -84,9 +84,28 @@ message is dropped, and **no amount of waiting can succeed** — there is nothin
 wait for. Raising the timeout cannot fix this, which is worth stating because it is the obvious
 first thing to try.
 
-**Fix.** Make the caller retry, which is what the product contract actually requires: send, wait
-~25 s for a reply, re-send if none arrived, within the existing overall budget. Fail with a
-message that distinguishes "Terra never answered across N attempts" from "Terra answered late".
+**Fix as planned — and it was wrong.** The plan said to make the caller retry. Implemented, it
+failed **8 times in 180 s**, which disproved the diagnosis rather than fixing the suite.
+
+**The actual cause, found by then asking where Terra was.** Her position **persists between
+suites and nothing sends her home.** Her home is `office-ta`, but smoke and integration walk her
+elsewhere, and a suite that dies mid-run strands her — she was found in Jade's Office at (39,6)
+while the TA office spans y 14-19. `scheduleReplies` picks only agents whose room matches the
+speaker's, so Ana was talking to an empty room. **No timeout and no retry count could ever have
+worked.**
+
+**The fix that works:** the suite *places* Terra in the TA office through its own admin
+connection and waits for her to arrive, retrying the send because the server refuses it while
+she is busy. It no longer assumes where she is.
+
+**The retry helper was kept** — busy-drop is genuine behaviour, so it is honest belt-and-braces,
+and its diagnostic ("never answered across 8 attempts — she may be stuck busy rather than merely
+slow") is precisely what exposed the wrong diagnosis. A plain timeout would have said "waiting
+for Terra" a second time and invited the same wrong conclusion a third time.
+
+**Worth keeping as a lesson:** a wait that *cannot* succeed is indistinguishable from a wait
+that is *too short*. Two diagnoses in a row read this as impatience. Before lengthening any
+timeout, check that the thing being waited for is possible at all.
 
 **Deliberately not doing two things.** Not raising the timeout — it cannot work. Not changing
 the server so that a busy agent queues or acknowledges — that is a product change, and making
@@ -100,11 +119,19 @@ reply, no "one moment", no typing indicator. The admin path has a courtesy line 
 With five students sharing one Terra this will happen in class. To be filed as a new
 `open-issues.md` entry under section E, and fixed separately.
 
-### Verification — the definition of done A1 and A2 already state
+### Verification — done 2026-08-22, both bars met
 
-- `smoke → integration → multiuser → ghost-test` green end to end in **one** run
-- `ghost-test` green twice in a row: once against a freshly started server, once as the fourth
-  suite in the sequence
+- **`smoke → integration → multiuser → ghost-test` all green in one run** from a fresh server
+- **`ghost-test` green twice**: standalone against a fresh server (7 entities) and as the fourth
+  suite (9 entities) — two different totals, which is exactly what the old assertion could not
+  tolerate
+- multiuser step 5 now reports `✓ Terra is in the TA office (put there by this suite, not
+  assumed)`, and both students were answered on the first attempt
+
+**One thing this run did not settle.** In the *previous* sequence, `integration` failed once on
+`TIMEOUT waiting for: Jade & Terra in the Computer Lab`, then passed here. Filed as A3 rather
+than dismissed as a flake: one failure in two runs is data. It is not attributable to this work,
+which touches no server code and not `integration.ts`.
 
 ### Scope
 
