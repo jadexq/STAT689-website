@@ -1,11 +1,14 @@
 // The idle sweep that frees the TA office (MainRoom.sweepSoloRooms).
 //
-// Not part of the default suite: the real windows are 4 and 5 MINUTES, and
-// a test that sleeps five minutes gets skipped, which is worse than not
-// having it. So the windows are env-tunable and this script asks for short
-// ones. Start the space server with:
+// Two rules, both time-based:
+//   - the TA office is freed when its occupant goes quiet (SOLO_*)
+//   - anyone idle anywhere else is walked back to their own room (HOME_*)
 //
-//   SOLO_WARN_S=4 SOLO_IDLE_S=8 npm run dev      (virtual_space, port 2567)
+// Not part of the default suite: the real windows are minutes, and a test
+// that sleeps for minutes gets skipped, which is worse than not having it.
+// The windows are env-tunable, and they must be set ON THE SERVER:
+//
+//   SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10 npm run dev   (port 2567)
 //
 // then: npx tsx scripts/idle-test.ts   (makes one real LLM call)
 
@@ -104,6 +107,28 @@ async function main() {
   await wait(idleMs * 0.8);
   assert(!omar.notices.slice(before).some((n) => /being freed/i.test(n.text)), "Omar was not evicted after speaking");
   assert(inside(omar), "…and is still in the office");
+
+  console.log("\n5. Idle anywhere else, and you are walked back to your own room");
+  // A rostered student, so "home" is an office rather than the hall — the
+  // hall is where an unassigned address lands, and you cannot be returned to
+  // somewhere you already are.
+  const jade = await join(client, "jadewang@gmail.com");
+  if (jade.init!.home === "commons") {
+    console.log("  ! jadewang@gmail.com has no slot — set STUDENTS in .env. Skipping.");
+  } else {
+    const homeSpawn = spawn(jade.init!.home!);
+    const meJ = () => jade.world.find((x) => x.id === jade.init!.you)!;
+    const atHome = () => meJ().x === homeSpawn.x && meJ().y === homeSpawn.y;
+    assert(atHome(), `Jade started in their own room (${jade.init!.home})`);
+    jade.room.send("goto", spawn("library"));
+    await waitUntil(() => { const l = spawn("library"); return meJ().x === l.x && meJ().y === l.y; }, 30000,
+      "Jade walked to the Library");
+    const nMark = jade.notices.length;
+    await waitUntil(() => jade.notices.slice(nMark).some((n) => /heading back/i.test(n.text)), BUDGET_MS,
+      "Jade was told they are being sent home");
+    await waitUntil(atHome, 40000, "…and walked back to their own room without touching anything");
+  }
+  await jade.room.leave();
 
   console.log("\nIDLE TEST PASSED ✅");
   await ana.room.leave();

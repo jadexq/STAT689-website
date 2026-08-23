@@ -20,10 +20,13 @@
 //   IAP_JWKS_URL         override Google's key endpoint (tests only)
 //   ADMIN_EMAILS         comma-separated instructor allowlist
 //   ROSTER               "a@x.com:Sam,b@y.com:Ben" — avatar display names
+//   STUDENTS             "a@x.com=s1" — which student character each address
+//                        controls; see roster.ts
 //   DEV_USER             identity to assume when not behind IAP
 
 import type { IncomingMessage } from "http";
 import { createPublicKey, verify as cryptoVerify, type KeyObject } from "crypto";
+import { slotFor } from "./roster";
 
 export interface Identity {
   email: string;
@@ -240,8 +243,12 @@ function nameFromEmail(email: string): string {
   return (words.join(" ") || email).slice(0, 24);
 }
 
+// Display name, most specific first: an explicit ROSTER entry, then the
+// character this student took over (a real student controls "Sam" until we
+// know their actual name), then a guess from the address.
 function build(email: string): Identity {
-  return { email, name: ROSTER.get(email) || nameFromEmail(email), isAdmin: ADMINS.has(email) };
+  const name = ROSTER.get(email) || slotFor(email)?.name || nameFromEmail(email);
+  return { email, name, isAdmin: ADMINS.has(email) };
 }
 
 function header(req: IncomingMessage | undefined, name: string): string | undefined {

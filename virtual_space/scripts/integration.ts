@@ -90,23 +90,25 @@ async function main() {
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
-  console.log("\n1. World: 7 inhabitants, boards, no room-forced skills left");
+  console.log("\n1. World: 7 inhabitants, own rooms, boards");
+  await waitUntil(() => !!init, 6000, "init received");
+  assert(typeof init.home === "string", `init names my own room: ${init.home}`);
   await waitUntil(() => !!init && world.entities.length === 7, 6000, "7 inhabitants (no avatar for the admin)");
   assert(init.rooms.filter((r: any) => r.hasBoard).length === 2, "Library and Computer Lab have boards");
   assert(!init.rooms.some((r: any) => r.forcedSkill || r.modeLabel), "no room advertises a TA mode any more");
   assert(init.rooms.find((r: any) => r.id === "office-ta")?.soloOccupancy === true, "TA office is solo-occupancy");
 
-  console.log("\n2. The TA cannot be moved — not even by the instructor");
-  // Both routes have to be shut, and they are separate code paths: the
-  // keyboard goes through handleStep, the panel through the admin `send`
-  // action. Closing one and not the other is the likely regression.
+  console.log("\n2. No character can be moved — not even by the instructor");
+  // The keyboard path (handleStep) and the panel path are separate code, so
+  // closing one and not the other is the likely regression. The panel path is
+  // now closed by the action not existing at all.
   const t0 = { ...taEnt()! };
   admin.send("step", { dx: 0, dy: -1 });
   await waitUntil(() => notices.length > 0, 3000, "arrow key returned a notice instead of moving the TA");
   assert(taEnt()!.x === t0.x && taEnt()!.y === t0.y, "TA did not move a tile");
   const ackMark0 = acks.length;
   admin.send("admin", { action: "send", agent: "ta", dest: "library" });
-  await waitUntil(() => acks.slice(ackMark0).some((a) => !a.ok), 5000, "panel refused to walk the TA");
+  await waitUntil(() => acks.slice(ackMark0).some((a) => !a.ok), 5000, "the panel has no way to walk anyone");
   assert(at(taEnt(), spawnOf("office-ta")), "TA is still in the TA office");
 
   console.log("\n3. Admin ↔ TA private chat");
@@ -165,31 +167,23 @@ async function main() {
   );
   assert(aChats.slice(aMark2).some((c) => c.from === "TA"), "the admin hears it too");
 
-  console.log("\n7b. The TA office is 1:1 — virtual students are not admitted");
-  // An earlier version of this suite walked Sam in here to prove `direct`
-  // still worked, and left him standing in the office. He then joined every
-  // real conversation, because scheduleReplies picks up any agent in the
-  // room. Two fixes: the server refuses the destination, and this suite
-  // does its dispatching somewhere it is willing to clean up.
-  const ackMark1 = acks.length;
-  admin.send("admin", { action: "send", agent: "sam", dest: "office-ta" });
-  await waitUntil(() => acks.slice(ackMark1).some((a) => !a.ok), 5000, "Sam was refused entry to the TA office");
-  assert(!at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-ta")), "…and did not go");
+  console.log("\n7b. Every stand-in is in their own office, and stays there");
+  // An earlier version of this suite walked Sam into the TA office to prove
+  // `direct` worked, and left him there. He then joined real conversations,
+  // because scheduleReplies picks up any agent in the room (open-issues E5).
+  // The action that let a suite do that no longer exists.
+  for (const [key, office] of [["sam", "office-s1"], ["ben", "office-s2"], ["chloe", "office-s3"],
+                               ["dev", "office-s4"], ["grace", "office-s5"]] as const) {
+    assert(at(world.entities.find((e) => e.id === `agent-${key}`), spawnOf(office)), `${key} is in ${office}`);
+  }
 
-  console.log("\n7c. A virtual student can still be dispatched and directed elsewhere");
-  student.send("goto", spawnOf("commons"));
-  await waitUntil(() => at(me(), spawnOf("commons")), 30000, "student left the TA office for the Common Area");
+  console.log("\n7c. A stand-in can still be directed — in their own room");
+  student.send("goto", spawnOf("office-s1"));
+  await waitUntil(() => at(me(), spawnOf("office-s1")), 30000, "student walked to Sam's office");
   const sMark3 = sChats.length;
-  admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
-  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("commons")), 40000,
-    "Sam walked to the Common Area");
   admin.send("admin", { action: "direct", agent: "sam", instruction: "Say hello to whoever is here." });
-  await waitUntil(() => sChats.slice(sMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke as directed");
-  // Put him back. An agent left standing where a suite dropped him is the
-  // A2 failure mode all over again, and this time a user hit it.
-  admin.send("admin", { action: "send", agent: "sam", dest: "office-s1" });
-  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), 40000,
-    "Sam was sent home before the suite exits");
+  await waitUntil(() => sChats.slice(sMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke where he lives");
+  assert(at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), "…without going anywhere");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();

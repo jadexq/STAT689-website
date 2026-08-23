@@ -216,6 +216,56 @@ persist. The placement block added in `7eedc2a` becomes dead weight the day this
 2. **Timeout** — in scope; 4-minute warning, 5-minute return, as proposed.
 3. **Empty rooms** — seal the Prep Room; leave the Computer Lab open.
 
+### Addendum, same day — six students, six rooms
+
+The instructor tested as a student and found every human spawning in "Jade's Office" —
+`MainRoom.onJoin` had one hard-coded home for all humans. Since the role change that room is
+named after someone who can no longer be in it, and the idle timer would have returned five
+students to the same tile.
+
+**The decision: six student characters, one office each.** Five keep the existing names as
+placeholders; the sixth is the instructor's test account.
+
+| Slot | Office | Today |
+|---|---|---|
+| `s1`–`s5` | Sam's, Ben's, Chloe's, Dev's, Grace's | AI stand-ins |
+| `jade` | Jade's Office | the instructor's test student account |
+
+**A slot is a character, not a person.** That distinction is the whole design: when a real
+student's address is assigned to `s1`, they do not arrive *alongside* Sam — they take Sam over,
+same office, same name, until a real name is known. That is why the five names are placeholders
+rather than decoration, and it is why assigning an address removes the stand-in.
+
+Addresses live in the environment (`STUDENTS="addr=s1,…"`), never in `roster.ts`. The file is
+tracked in git and student addresses are not ours to publish. The server refuses to start on a
+slot assigned twice or an unknown slot id — the same fail-fast reasoning as the IAP audience
+check, because "two students share an office" is a discovery nobody should make in class.
+
+**An unassigned address still gets in**, but lands in the Common Area with a warning logged.
+Refusing a student at class time over a config gap is the wrong failure; putting them in
+somebody else's office is the failure we just fixed.
+
+**Nothing moves any more except humans.** The `send` action is gone entirely, for every
+character. Directing a stand-in to *speak* still works — it speaks where it lives. This retires
+the persistent-position bug class rather than narrowing it again; the previous addendum narrowed
+it and it fired within the day.
+
+**Two idle rules, deliberately different:**
+
+| Where | Activity that counts | Window | Why |
+|---|---|---|---|
+| TA office | speaking only | warn 4 min, out at 5 | a shared resource — someone silent in there is blocking the queue |
+| anywhere else | any operation | 10 min | nobody is harmed by loitering in the hall; this is the world tidying itself |
+
+Both return the student to **their own** office.
+
+**Found on the way: `.env` was being ignored.** `dotenv.config()` sat partway down `index.ts`,
+but ES imports are hoisted — every module reading `process.env` at module scope had already been
+evaluated. The roster reported zero assigned students while `.env` plainly assigned one. Now
+`server/env.ts` is the first import. Nothing in the cloud depended on it (Cloud Run sets real
+environment variables), which is exactly why it could sit there unnoticed: it only ever broke
+local development, where it looks like your config is being ignored rather than unread.
+
 ### Addendum, same day — the TA office is 1:1 including agents
 
 The instructor tested as a student and a virtual student joined the conversation. Cause and fix

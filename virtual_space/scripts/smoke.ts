@@ -76,7 +76,10 @@ async function main() {
   await waitUntil(() => !!init, 5000, "init received");
   await waitUntil(() => world.entities.length === 7, 5000, "7 inhabitants present");
   assert(world.entities.filter((e) => e.kind === "agent").length === 6, "6 agents (5 students + TA)");
-  assert(at(me(), spawnOf("office-jade")), "I spawned in Jade's office");
+  // Every student starts in their OWN room. ana@local is not on the roster,
+  // so hers is the Common Area — the assertion is written against init.home
+  // so it holds either way, and would catch a spawn in someone else's office.
+  assert(at(me(), spawnOf(init.home)), `I spawned in my own room (${init.home})`);
   assert(at(taEnt(), spawnOf("office-ta")), "TA is in the TA office");
 
   console.log("\n2. Movement");
@@ -87,8 +90,10 @@ async function main() {
   student.send("goto", { x: 0, y: 0 }); // wall: must be ignored
   await wait(400);
   assert(me()!.x === bx + 1, "invalid moves rejected by server");
+  student.send("goto", spawnOf("library"));
+  await waitUntil(() => at(me(), spawnOf("library")), 20000, "click-to-walk (BFS) reached the Library");
   student.send("goto", spawnOf("commons"));
-  await waitUntil(() => at(me(), spawnOf("commons")), 15000, "click-to-walk (BFS) reached the Common Area");
+  await waitUntil(() => at(me(), spawnOf("commons")), 20000, "…and back to the Common Area");
 
   console.log("\n3. Same-room isolation: chat with no agent nearby");
   const before = chats.length;
@@ -117,23 +122,15 @@ async function main() {
   await wait(500);
   assert(world.entities.length === 7, "admin joined without adding an avatar");
 
-  // The TA is a fixture. Not even the instructor may walk them out, which is
-  // what makes "go to the TA office to talk to the TA" a rule rather than a
-  // habit. Assert the refusal, not just that nothing happened — a silently
-  // dropped command would look identical.
+  // Nobody moves an agent any more — not the TA, not a stand-in, not the
+  // instructor. Assert the refusal, not merely that nothing happened: a
+  // silently dropped command looks identical from out here.
   const ackMark = acks.length;
-  admin.send("admin", { action: "send", agent: "ta", dest: "commons" });
-  await waitUntil(() => acks.slice(ackMark).some((a) => !a.ok), 5000, "admin's request to walk the TA was refused");
-  assert(at(taEnt(), spawnOf("office-ta")), "TA never left the TA office");
   admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
-  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("commons")), 30000,
-    "a virtual student can still be sent anywhere");
-  // And put back. Agents persist between runs, so a suite that leaves one
-  // standing somewhere makes it a fixture of everyone else's world — which
-  // is how a virtual student ended up joining real TA conversations.
-  admin.send("admin", { action: "send", agent: "sam", dest: "office-s1" });
-  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), 30000,
-    "…and is sent home before the suite exits");
+  await waitUntil(() => acks.slice(ackMark).some((a) => !a.ok), 5000, "the walk-an-agent action is gone, and says so");
+  await wait(600);
+  assert(at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), "Sam stayed in his office");
+  assert(at(taEnt(), spawnOf("office-ta")), "the TA stayed in the TA office");
 
   console.log("\n5. Walk into the TA office — the TA answers from the TA brain");
   student.send("goto", spawnOf("office-ta"));

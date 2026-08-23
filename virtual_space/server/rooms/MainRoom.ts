@@ -47,6 +47,7 @@ import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
 import { logEvent } from "../logger";
 import { identify, type Identity } from "../identity";
+import { homeRoomFor, UNASSIGNED_ROOM } from "../roster";
 
 export interface Entity {
   id: string;
@@ -87,6 +88,14 @@ const RECONNECT_WINDOW_S = 120;
 const SOLO_WARN_MS = Number(process.env.SOLO_WARN_S || 4 * 60) * 1000;
 const SOLO_IDLE_MS = Number(process.env.SOLO_IDLE_S || 5 * 60) * 1000;
 const SOLO_SWEEP_MS = 5_000;
+// Everywhere else, a student who has done nothing at all — not moved, not
+// spoken — is walked back to their own office. Longer and gentler than the
+// solo rule above, because standing idle in the hall costs nobody anything;
+// this is about the world tidying itself, not about fairness.
+//
+// Shorter than the CLIENT's 15-minute idle park (main.ts IDLE_MS), so a
+// student who wanders off is put away before their socket is.
+const HOME_IDLE_MS = Number(process.env.HOME_IDLE_S || 10 * 60) * 1000;
 const TA_OFFLINE_MSG =
   "(my TA brain isn't reachable — is the Virtual TA server running? `npm run dev` in virtual_ta)";
 
@@ -102,6 +111,7 @@ export class MainRoom extends Room {
   private soloRooms = ROOMS.filter((r) => r.soloOccupancy);
   private lastShut = ""; // last broadcast door state, to avoid re-sending it
   private soloIdle = new Map<string, { last: number; warned: boolean }>();
+  private lastOp = new Map<string, number>(); // any operation: move or speak
 
   onCreate() {
     this.autoDispose = false;
@@ -164,7 +174,15 @@ export class MainRoom extends Room {
           this.lastRoom.delete(sid);
         }
       }
-      const home = roomById("office-jade")!;
+      const home = roomById(homeRoomFor(id.email))!;
+      if (home.id === UNASSIGNED_ROOM) {
+        // Not on the roster. They still get in — refusing a student at class
+        // time over a config gap is the wrong failure — but they land in the
+        // hall rather than in somebody else's office, and the address is
+        // logged so it can be assigned.
+        console.warn(`[roster] ${id.email} has no student slot — spawning in ${home.label}. Add it to STUDENTS.`);
+      }
+      this.lastOp.set(client.sessionId, Date.now());
       const p: Entity = {
         id: client.sessionId,
         name: id.name,
@@ -190,6 +208,9 @@ export class MainRoom extends Room {
       email: id.email,
       name: id.name,
       agents: AGENTS.map((a) => ({ key: a.key, name: a.name })),
+      // Where this person starts and is returned to when idle. The Common
+      // Area when they are not on the roster.
+      home: isAdmin ? null : homeRoomFor(id.email),
       // Current state, because `doors` is only broadcast on change.
       shut: this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id),
     });
@@ -204,7 +225,7 @@ export class MainRoom extends Room {
     // person who is not there.
     if (p && this.soloRooms.some((r) => roomAt(p.x, p.y) === r.id)) {
       this.stopWalk(p.id);
-      const home = roomById("office-jade")!;
+      const home = roomById(homeRoomFor(this.identities.get(client.sessionId)?.email || ""))!;
       p.x = home.spawn.x;
       p.y = home.spawn.y;
       logEvent("solo_vacated", { who: p.name, reason: "disconnect" });
@@ -225,6 +246,8 @@ export class MainRoom extends Room {
     this.admins.delete(client.sessionId);
     this.identities.delete(client.sessionId);
     this.lastRoom.delete(client.sessionId);
+    this.soloIdle.delete(client.sessionId);
+    this.lastOp.delete(client.sessionId);
     this.broadcastWorld();
   }
 
@@ -261,6 +284,7 @@ export class MainRoom extends Room {
     const dx = Math.sign(Number(msg?.dx) || 0);
     const dy = Math.sign(Number(msg?.dy) || 0);
     if (Math.abs(dx) + Math.abs(dy) !== 1) return;
+    this.lastOp.set(client.sessionId, Date.now());
     this.stopWalk(e.id);
     const nx = e.x + dx;
     const ny = e.y + dy;
@@ -280,6 +304,7 @@ export class MainRoom extends Room {
     const tx = Math.floor(Number(msg?.x));
     const ty = Math.floor(Number(msg?.y));
     if (!walkable(tx, ty)) return;
+    this.lastOp.set(client.sessionId, Date.now());
     const blocked = this.blockedFor(e.id);
     if (blocked.has(`${tx},${ty}`)) {
       return this.notice(client, this.shutMsg(roomAt(tx, ty) || "office-ta"));
@@ -349,9 +374,12 @@ export class MainRoom extends Room {
       const c = this.clientOf(occ.id);
       if (idle >= SOLO_IDLE_MS) {
         this.soloIdle.delete(occ.id);
+        // Count the eviction as an operation, or the general sweep below
+        // fires on the same person mid-walk and sends a second notice.
+        this.lastOp.set(occ.id, now);
         const home = roomById("office-jade")!;
         const path = findPath({ x: occ.x, y: occ.y }, home.spawn);
-        if (c) this.notice(c, `You have been quiet for a while, so the ${r.label} is being freed for the next student. Walk back in any time.`);
+        if (c) this.notice(c, `You have been quiet for a while, so ${this.roomPhrase(r.id)} is being freed for the next student. Walk back in any time.`);
         logEvent("solo_vacated", { who: occ.name, room: r.id, reason: "idle" });
         if (path && path.length) this.walk(occ, path, 130);
         else {
@@ -362,10 +390,25 @@ export class MainRoom extends Room {
       } else if (idle >= SOLO_WARN_MS && !st.warned) {
         st.warned = true;
         const left = Math.max(1, Math.round((SOLO_IDLE_MS - idle) / 1000));
-        if (c) this.notice(c, `Still there? Say something in the next ${left}s or the ${r.label} will be freed for the next student.`);
+        if (c) this.notice(c, `Still there? Say something in the next ${left}s or ${this.roomPhrase(r.id)} will be freed for the next student.`);
       }
     }
     for (const id of [...this.soloIdle.keys()]) if (!occupants.has(id)) this.soloIdle.delete(id);
+
+    // Everyone else: idle anywhere but their own office, walk them home.
+    for (const [sid, p] of this.players) {
+      if (occupants.has(p.id)) continue; // the solo rule above owns them
+      if (this.walkers.has(p.id)) continue; // already on their way somewhere
+      const home = roomById(homeRoomFor(this.identities.get(sid)?.email || ""))!;
+      if (roomAt(p.x, p.y) === home.id) continue; // already home
+      if (now - (this.lastOp.get(sid) ?? now) < HOME_IDLE_MS) continue;
+      this.lastOp.set(sid, now); // don't re-fire while the walk is in progress
+      const c = this.clientOf(p.id);
+      if (c) this.notice(c, `Nothing has happened for a while — heading back to ${this.roomPhrase(home.id)}.`);
+      logEvent("sent_home", { who: p.name, from: roomAt(p.x, p.y), to: home.id });
+      const path = findPath({ x: p.x, y: p.y }, home.spawn);
+      if (path && path.length) this.walk(p, path, 130);
+    }
   }
 
   // The one place the "TA never moves" rule is enforced. Both movement
@@ -375,6 +418,13 @@ export class MainRoom extends Room {
     if (e.id !== TA_ID) return false;
     this.notice(client, "The TA stays in the TA office — walk in to talk to them.");
     return true;
+  }
+
+  // "the Library" but "Jade's Office" — a possessive label already carries
+  // its article, and "the Jade's Office" reads like a machine wrote it.
+  private roomPhrase(rid: string): string {
+    const label = roomById(rid)?.label ?? rid;
+    return /^\S+'s\s/.test(label) ? label : `the ${label}`;
   }
 
   private notice(client: Client, text: string) {
@@ -434,6 +484,7 @@ export class MainRoom extends Room {
     // reading a long answer is idle by the mouse's measure but not by the
     // one that matters, which is why the warning comes first.
     this.soloIdle.set(client.sessionId, { last: Date.now(), warned: false });
+    this.lastOp.set(client.sessionId, Date.now());
     this.pushHistory(rid, { name: p.name, text });
     this.deliverToRoom(rid, { from: p.name, id: p.id, kind: "human", text });
     logEvent("chat", { who: p.name, room: rid, text });
@@ -604,26 +655,16 @@ export class MainRoom extends Room {
       return;
     }
 
-    if (action === "send") {
-      const agent = this.agents.find((a) => a.def.key === msg?.agent);
-      const dest = roomById(String(msg?.dest || ""));
-      if (!agent || !dest) {
-        return client.send("adminAck", { ok: false, note: "Pick an agent and a destination room." });
-      }
-      if (agent.id === TA_ID) {
-        return client.send("adminAck", { ok: false, note: "The TA stays in the TA office. Send a virtual student instead." });
-      }
-      if (dest.soloOccupancy) {
-        return client.send("adminAck", { ok: false, note: `The ${dest.label} is for one student and the TA — ${agent.name} can't go in.` });
-      }
-      const path = findPath({ x: agent.x, y: agent.y }, dest.spawn);
-      if (!path) {
-        return client.send("adminAck", { ok: false, note: "No path there." });
-      }
-      logEvent("admin_send", { agent: agent.name, dest: dest.id });
-      this.walk(agent, path, 220);
-      client.send("adminAck", { ok: true, note: `${agent.name} is walking to the ${dest.label}.` });
-    }
+    // A stale client — or a stale test — should be told, not ignored. The
+    // "send an agent somewhere" action lived here until 2026-08-22.
+    client.send("adminAck", { ok: false, note: `Unknown admin action "${String(action).slice(0, 40)}".` });
+
+    // There is deliberately no "send an agent somewhere" action any more.
+    // Every character now stays in their own room: the TA because the office
+    // is where students come to them, the stand-ins because an agent left in
+    // the wrong room joins conversations it has no business in (open-issues
+    // E5) and nothing ever put it back. Directing one to SPEAK still works —
+    // it just speaks where it lives.
   }
 
   // ---------- lecturer mic → class transcript in the TA brain ----------

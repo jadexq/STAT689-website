@@ -457,6 +457,23 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   moved an agent and stopped.
 - **Resolved when:** ~~a full four-suite run leaves every agent in their own office.~~ Met, checked.
 
+### E6. Every human spawned in the same room
+- [x] **Resolved 2026-08-22 — found by the instructor while testing as a student.**
+- `MainRoom.onJoin` used `roomById("office-jade")` as the home of every human. Since the role
+  change that room is named after someone who can no longer occupy it, and the new idle timer
+  would have returned all five students to the same tile.
+- Fixed by `server/roster.ts`: six student characters, one office each, addresses assigned in the
+  environment. See `app-changes.md` for the design and why a slot is a character rather than a
+  person.
+
+### D5b. `jadewang@gmail.com` is not on the IAP allowlist
+- [ ] **Open — blocks the instructor's own student-side testing in the cloud.**
+- The test-student account works locally (`STUDENTS` in `virtual_space/.env`). For the deployed
+  service it needs two things, and neither is done: **IAP access** (`roles/iap.httpsResourceAccessor`)
+  and **`STUDENTS=jadewang@gmail.com=jade` in the Cloud Run environment**. Without the second it
+  signs in and lands in the Common Area, which looks like a bug rather than a missing variable.
+- Distinct from D5, which is about the four real student addresses.
+
 ### E3. Bullet lists and headings still arrive as raw markdown in the space chat
 - [ ] **Open — cosmetic, low cost to live with, cheap to finish.**
 - The chat bubble renders bold, inline code and links (`ea9bb22`), which covers most of what the

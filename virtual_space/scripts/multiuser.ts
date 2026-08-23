@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 type Entity = { id: string; name: string; kind: string; x: number; y: number };
-type Init = { you: string | null; role: string; isAdmin: boolean; email: string; name: string; rooms: any[] };
+type Init = { you: string | null; role: string; isAdmin: boolean; email: string; name: string; rooms: any[]; home: string | null };
 
 const URL = process.env.VS_URL || "ws://localhost:2567";
 // Where the TA brain keeps one file per conversation (see virtual_ta/server/logger.ts).
@@ -107,6 +107,8 @@ async function join(client: Client, devUser: string, role?: "admin"): Promise<Jo
   return j;
 }
 
+const spawnOfInit = (j: Joined, roomId: string) => j.init!.rooms.find((r: any) => r.id === roomId).spawn;
+
 async function main() {
   console.log(`Connecting to ${URL} …`);
   const client = new Client(URL);
@@ -114,6 +116,14 @@ async function main() {
   console.log("\n1. Two different people, two avatars");
   const ana = await join(client, "ana@local");
   const omar = await join(client, "omar@local");
+  // Everyone lands in their own room — the Common Area for an address that
+  // is not on the roster. The point is that two people never share a spawn
+  // tile just because the code had one hard-coded home for all humans.
+  for (const j of [ana, omar]) {
+    const sp = spawnOfInit(j, j.init!.home!);
+    const e = j.world.find((x) => x.id === j.init!.you)!;
+    assert(e.x === sp.x && e.y === sp.y, `${j.init!.name} spawned in their own room (${j.init!.home})`);
+  }
   const nameOf = (j: Joined) => j.world.find((e) => e.id === j.init!.you)?.name;
 
   // Counts are relative, not absolute: a seat is held for a couple of
@@ -156,14 +166,16 @@ async function main() {
   );
 
   console.log("\n4. Chat still reaches only the same room");
-  ana.room.send("goto", spawn("commons"));
+  // Ana goes somewhere Omar is not. Which room does not matter; that they are
+  // apart does.
+  ana.room.send("goto", spawn("library"));
   await waitUntil(
-    () => { const e = ana.world.find((x) => x.id === ana.init!.you)!; return e.x === c.x && e.y === c.y; },
-    20000,
-    "Ana walked to the Common Area"
+    () => { const e = ana.world.find((x) => x.id === ana.init!.you)!; const l = spawn("library"); return e.x === l.x && e.y === l.y; },
+    25000,
+    "Ana walked to the Library"
   );
   const mark = ana.chats.length;
-  omar.room.send("chat", { text: "(Omar, alone in the office)" });
+  omar.room.send("chat", { text: "(Omar, elsewhere)" });
   await wait(1500);
   assert(ana.chats.length === mark, "Ana did not hear Omar from another room");
 
@@ -208,7 +220,7 @@ async function main() {
   assert(!inTaOffice(omar), "Omar did not get in while Ana was inside");
 
   console.log("\n7. The door reopens when Ana leaves");
-  ana.room.send("goto", spawn("commons"));
+  ana.room.send("goto", spawn(ana.init!.home ?? "commons"));
   await waitUntil(() => !inTaOffice(ana), 30000, "Ana walked out");
   omar.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(omar), 30000, "Omar got in once the office was free");

@@ -48,6 +48,7 @@ type InitMsg = {
   name: string;
   agents: { key: string; name: string }[];
   shut: string[]; // solo-occupancy rooms currently taken
+  home: string | null; // your own room; null for the admin, who has no avatar
 };
 
 const params = new URLSearchParams(location.search);
@@ -95,6 +96,13 @@ function shade(c: number, f: number): number {
 function roomInfoAt(x: number, y: number): RoomInfo | undefined {
   const named = init?.rooms.find((r) => r.kind !== "commons" && x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2);
   return named ?? init?.rooms.find((r) => r.kind === "commons");
+}
+
+// "the Library" but "Jade's Office" — see MainRoom.roomPhrase.
+function roomPhrase(roomId: string | null): string {
+  const label = init?.rooms.find((r) => r.id === roomId)?.label;
+  if (!label) return "the world";
+  return /^\S+'s\s/.test(label) ? label : `the ${label}`;
 }
 
 function labelFor(e: Entity): string {
@@ -212,7 +220,7 @@ class WorldScene extends Phaser.Scene {
       // The server refuses this too; saying so here saves the round trip
       // and, more usefully, explains a click that would otherwise do nothing.
       if (target && shutRooms.has(target.id) && !insideRoom(target)) {
-        addMsg({ who: "system", text: `The ${target.label} is occupied — one student at a time. Try again shortly.`, cls: "sys" });
+        addMsg({ who: "system", text: `${roomPhrase(target.id).replace(/^the /, "The ")} is occupied — one student at a time. Try again shortly.`, cls: "sys" });
         return;
       }
       if (idleParked) return;
@@ -618,14 +626,6 @@ function wirePanel() {
     agentSel.appendChild(o);
   }
   agentSel.value = "ta";
-  const destSel = $<HTMLSelectElement>("dest-sel");
-  for (const r of init.rooms) {
-    const o = document.createElement("option");
-    o.value = r.id;
-    o.textContent = r.label;
-    destSel.appendChild(o);
-  }
-  destSel.value = "commons";
   const boardSel = $<HTMLSelectElement>("board-sel");
   for (const r of init.rooms.filter((r) => r.hasBoard)) {
     const o = document.createElement("option");
@@ -656,10 +656,6 @@ function wirePanel() {
     if (!text) return;
     room.send("admin", { action: "post", board: boardSel.value, text });
     box.value = "";
-  };
-
-  $<HTMLButtonElement>("send-agent").onclick = () => {
-    room.send("admin", { action: "send", agent: agentSel.value, dest: destSel.value });
   };
 
   // Lecturer mic → class transcript in the TA brain (Chrome Web Speech).
@@ -890,7 +886,7 @@ function wireRoom(client: Client) {
       text:
         role === "admin"
           ? "Connected as admin. The TA waits in the TA office for students to walk in."
-          : "Connected. You're in your office — walk out through the door to the halls.",
+          : `Connected. You're in ${roomPhrase(init.home)} — walk out through the door to the halls.`,
       cls: "sys",
     });
     new Phaser.Game({
