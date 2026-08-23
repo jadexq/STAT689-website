@@ -184,16 +184,36 @@ Recorded so they are not rediscovered as if they were new problems.
   and every later one fail. Verification is **two** `[sync] flushed (changed)` lines, not one.
 
 ### D2. Artifact Registry has no cleanup policy — the tightest allowance we have
-- [ ] **Open — will bite during Phase C, not after**
-- The free allowance is **0.5 GB** and the real app image is **107 MB compressed** (measured,
-  plan §14d), so **roughly four `--source` deploys fill it**. Phase C means iterating, so this
-  is the first free-tier line we will actually hit.
-  *(An earlier version of this entry said ~75 MB and seven deploys. That was the throwaway
-  `iap-spike` probe image, not the app.)*
-- Nothing prunes automatically, and `gcloud run services delete` does not remove images — that
-  gap already caught us once (plan §14l.7).
+- [x] **Resolved 2026-08-22.** A cleanup policy is now active on `cloud-run-source-deploy`
+  (`cleanupPolicyDryRun: false`), applied from a JSON policy file:
+  - `keep-recent-versions` — KEEP the 3 most recent versions
+  - `delete-untagged` — DELETE untagged versions older than 7 days
+  - `delete-stale` — DELETE any version older than 60 days
+
+  **Why the live image cannot be collected:** in Artifact Registry a KEEP rule takes precedence
+  over a DELETE rule, and `keep-recent-versions` is age-blind. The serving image is always the
+  most recent, so it is always kept — including if the service runs untouched past 60 days.
+  Verified by applying with `--dry-run` first, then `--no-dry-run`, then re-listing the image.
+- **The one real risk left:** rolling back to a revision whose image has aged out of the newest
+  three. Pin or re-deploy rather than assuming an old revision can still start.
+- The free allowance is **0.5 GB**. After the Phase C deploy the repository held **one** image
+  and measured **191.87 MB**, so on the order of **two further deploys** would reach the free
+  line — tighter per image than the 107 MB compressed figure in plan §14d suggests, because the
+  repository total includes more than the compressed image.
+  *(Two earlier versions of this entry were wrong. The first said ~75 MB and seven deploys —
+  that was the throwaway `iap-spike` probe image. The second, and a claim made in conversation
+  on 2026-08-22, said the repo held **three** images: that came from piping
+  `--format='value(IMAGE)'` into `wc -l`, which counted gcloud's "Listing items under…" header
+  and a trailing blank line as images. It held one. **Count with
+  `--format='value(version)' | grep sha256`, or read `Repository Size` directly.**)*
+- Before the policy, nothing pruned automatically, and `gcloud run services delete` does not
+  remove images — that gap already caught us once (plan §14l.7).
 - The repo's reported size lags deletions; trust `images list`, not `repositories describe`.
-- **Resolved when:** a cleanup policy exists on the repo, or pruning is part of the deploy habit.
+- **Cost footnote, because this was over-weighted in conversation.** Beyond the free 0.5 GB,
+  Artifact Registry bills on the order of $0.10/GB/month. Ten stored images would be roughly
+  six cents a month. Crossing the free line is a tidiness event, not a financial one — the real
+  reason to prefer local iteration over redeploying is the ~5-minute build and the loss of
+  direct log access, not storage.
 
 ### D2b. The Ollama bill has no limit and is outside the GCP cap
 - [ ] **Open — accepted for now, revisit before the class scales up**
