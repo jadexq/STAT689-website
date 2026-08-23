@@ -35,13 +35,55 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-23 · Feedback handouts — per-student versions, per-section judgement
 
-**Status:** **planned, not started.** Design settled in
+**Status:** **shipped 2026-08-23**, verified locally — `b87a6e2` (4a), `ba1c2fe` (4b), `afe0666`
+(4c), `b316963` (4d and the suite). All six existing suites green plus a seventh,
+`scripts/handout-test.ts`, 83 assertions. **Not deployed**, and until it is, no student can
+reach any of it: every part of this is student-facing and students reach the app only through
+Cloud Run. Design settled in
 [`gpt_student_feedback_handout_model_design.md`](./gpt_student_feedback_handout_model_design.md);
 this entry is the executable half, and **diverges from it in one place** — see decision 6, which
 drops the pairwise probe that document recommends. Authoring rules for the handouts themselves
 live in [`handout-authoring.md`](./handout-authoring.md) — the instructor writes them, the app never
-generates them. **Blocked on the deploy**: every part of this is student-facing, and students
-reach the app only through Cloud Run.
+generates them.
+
+**What step 4 cost that the plan did not predict.** Six things, none large, all worth writing down.
+
+1. **`handout-format.ts` is its own module.** The plan listed `server/handouts.ts` and the bundler.
+   But the bundler cannot import `handouts.ts` without dragging in `roster.ts` — which throws at
+   module load on a malformed `STUDENTS` — and `paths.ts`, and `.env`. A validator that refuses to
+   run until the app is configured is a validator nobody runs. The types, the content hash and
+   `validateBundle` moved into a module that imports only `crypto`. Same shape as 2b's finding
+   that the agenda parser belongs beside `materials.ts` rather than inside it.
+2. **The salt check has to run *before* `identify()`.** Decision 3 said the routes 503 without a
+   salt; it did not say where in the route. Behind IAP with no salt, `identify()` runs first and
+   answers 401, so the failure mode the suite is meant to assert was unreachable without minting a
+   JWT. Moved ahead of the identity check on all five routes — which is the truer answer anyway:
+   whether the feature is configured has nothing to do with who is asking.
+3. **`grade` is nullable, and the record schema above understates it.** A student who types a
+   comment and closes the tab before clicking a number has still said the most useful thing on the
+   page. Those records export and are skipped when pairs are derived.
+4. **The suite has to bring its own server.** The Verification section below says "run against a
+   fresh server over `fixtures/handout-sample/`". It cannot: every property worth asserting here is
+   about *six* students holding six versions between them, and a developer's `.env` assigns one
+   slot — a Latin square asserted against a one-student roster is not asserted at all. So
+   `handout-test.ts` spawns the space on a spare port with its own `DATA_DIR` under the system
+   temp directory and its own six-address roster, plus a second IAP-mode server with no salt, and
+   throws both away. It is also the only suite that needs nothing else running, which is the
+   separation from the TA made visible.
+5. **`express.json()` ordering, not the route's own limit.** A six-version handout is well past
+   body-parser's 100 kB default, and the obvious fix — a bigger limit on the route — never runs,
+   because the first parser to touch a request sets `req._body` and every later one returns early.
+   The larger parser is registered on `/api/handouts` *before* the global one.
+6. **KaTeX is served from the installed package, not copied into `client/static/`.** Decision 5
+   assumed the fonts had to be vendored. They do not: `katex` is a runtime dependency, so the
+   Dockerfile's `npm prune --omit=dev` leaves it in place, and `express.static` over its `dist`
+   keeps a megabyte of woff2 out of git.
+
+Two smaller decisions taken while building, recorded because they are not obvious from the code:
+the panel keys on `init.home` rather than on "their own office", so someone not yet on the roster
+— who has no office and lands in the Common Area — still finds out why their links will not open;
+and `exportPairs` drops a pair whose two sides share a `version_id`, because two records of one
+version compare two readers rather than two approaches.
 
 ### What the instructor asked for
 
@@ -241,9 +283,10 @@ later by reaching for `llm.ts` to summarise comments.
 | 4c | **The section widget and the write path** | A 1–5 grade after each section; a grade of 3 or below reveals the tag list — `too_abstract`, `too_difficult`, `too_simple`, `too_long`, `missing_examples`, `poor_organization`, `unclear_notation` — and a comment box is always available. Autosaves on click, no submit button, restores on reload. `POST /api/handouts/:id/feedback` takes the student from `identify()` and **never** from the body. | `virtual_space/server/handouts.ts`, `server/index.ts`, `server/render.ts` |
 | 4d | **The instructor's view** | Admin-only `GET /admin/handouts/:id`: response rate per section, the grade each version drew, tag counts, comments verbatim — ordered worst-first, and aggregated by section rather than by person. `?format=jsonl` exports the graded records; `?format=jsonl&pairs=1` exports the derived preference triples, rater-mean-centred, ties dropped. | `virtual_space/server/handouts.ts`, `server/index.ts`, `client/src/main.ts` |
 
-Delivery is part of 4b: a handout appears as a link on the student's **own office board** —
-private by construction, one per student — and is announced through the existing announcements
-feed. No new room, no new websocket message; the same lesson 3a learned from 2b.
+Delivery is part of 4b, and is **not** a board post — see gap 3, which overturned the sentence
+that stood here. `GET /api/handouts` lists what the caller may open and the client renders a 📝
+Handouts panel in the side panel on entering one's home room. No new room, no new websocket
+message; the same lesson 3a learned from 2b.
 
 ### The record, which is the actual product
 
@@ -316,9 +359,11 @@ The derived export is a second shape over the same data, built at export time an
 
 ### Verification
 
-A new `virtual_space/scripts/handout-test.ts`, run against a fresh server over
-`fixtures/handout-sample/` (two sections × three versions), asserting the properties that cannot
-be eyeballed:
+`virtual_space/scripts/handout-test.ts` — which **spawns its own** space rather than attaching to
+a running one, for the reason in finding 4 above. The tracked `fixtures/handout-sample/` (two
+sections × three versions) carries the real prose and is what the bundler is pointed at; the
+rotation properties are asserted over synthetic bundles built in the suite, because they need six
+versions and six raters. It asserts the properties that cannot be eyeballed:
 
 - all six students, all sections: **each version appears an equal number of times**, and within
   any single section the six students hold six distinct versions;
@@ -355,7 +400,8 @@ numbers is possible, this is human-subjects research and TAMU's IRB must see it 
 collection — an exemption for classroom educational research is routine, but cannot be applied
 retroactively. If it is purely for improving the course, it is ordinary teaching practice and no
 IRB is involved. The build does not change either way; the deadline does, and it arrives when the
-first handout does.
+first handout does. Now tracked as **D9** in [`open-issues.md`](./open-issues.md), because the
+build being done makes it the only thing left standing between here and collecting data.
 
 ---
 

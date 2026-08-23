@@ -349,6 +349,11 @@ Recorded so they are not rediscovered as if they were new problems.
 - Written into the runbook at [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §6 stage 2
   (warning box), stage 3, verify step 4b, and stage 5.
 - Distinct from **D5**, which is about *obtaining* the four real student addresses.
+- **Since step 4 the second failure is no longer soft.** A student with no `STUDENTS` slot lands
+  in the Common Area *and* is refused every handout outright — a 403 reading "you are not on the
+  class roster". That is deliberate (a missing slot has no rotation, and handing them slot 0's
+  would put two people on one student's versions and destroy the balance), and it turns a
+  cosmetic symptom into a blocking one. The upside is that it now announces itself.
 
 ### D6. Cloud Run CPU throttling starves the snapshot writer between requests
 - [x] **Resolved 2026-08-22.** `gcloud run services update stat689 --no-cpu-throttling` —
@@ -408,6 +413,34 @@ Recorded so they are not rediscovered as if they were new problems.
   design (proven at the Stage 2 first boot).
 - **Resolved when:** either the wipe is done before the first class, or a student has used the
   space and the item is deliberately closed unexecuted.
+
+### D8. `HANDOUT_SALT` is not set in Cloud Run, and must never change once it is
+- [ ] **Open. Blocks the first handout. Two failure modes, one of them silent.**
+- Student feedback is keyed by `sha256(HANDOUT_SALT + email)`. Behind IAP with no salt set, every
+  handout route answers **503** and says why, and the rest of the campus is unaffected — that
+  much is loud, asserted by `handout-test.ts`, and easy to fix.
+- **The silent one is changing the salt after data exists.** Every hash changes, so every student
+  silently loses their recorded version assignment *and* every record already collected becomes
+  an orphan under a hash nobody holds any more. Nothing errors. The dashboard simply shows fewer
+  responses than there were last week.
+- So: set it once, before the first handout, in the Cloud Run env; never rotate it; and if it
+  ever must be rotated, migrate the response filenames in the same operation.
+- It is a secret in the sense that matters — anyone holding it and the roster can invert the six
+  hashes — so it belongs in the deploy env, not in git, and it is never part of an export.
+- Locally a fixed dev salt stands in and the boot line says so, which is what lets the suite run.
+
+### D9. Whether the handout feedback is intended for publication — an IRB deadline, not a build one
+- [ ] **Open. Unanswered after being raised four times. The deadline arrives with the first
+      handout, not with the first paper.**
+- If a paper, a talk, or a post with aggregate numbers is possible, collecting student judgements
+  is human-subjects research and TAMU's IRB must see it **before** collection. An exemption for
+  classroom educational research is routine and cannot be applied retroactively.
+- If it is purely for improving the course, it is ordinary teaching practice and no IRB is
+  involved.
+- Nothing in the build changes either way — which is exactly why this is easy to keep postponing.
+- Related, and true regardless: the hash gives students deniability against a casual reader of the
+  dataset, not against the instructor, who holds the salt. Saying so plainly in week 1 is better
+  than implying an anonymity that does not exist.
 
 ---
 
@@ -550,6 +583,21 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   environment. See `app-changes.md` for the design and why a slot is a character rather than a
   person.
 
+### E7. There is no way to remove a handout, for the same reason there is no way to remove a reading
+- [ ] **Open. Small, and the second instance of one gap.**
+- Step 2 recorded that an uploaded reading cannot be taken down: re-uploading the same id replaces
+  it, which covers a correction but not a withdrawal. Step 4 opened the identical hole one system
+  over — a handout uploaded by mistake stays in every student's 📝 Handouts panel until the
+  container's `DATA_DIR` is cleared.
+- 1d's argument applies to both: the instructor can pin *and* unpin a board post because a mistake
+  must not be permanent.
+- Worse here than for readings in one way and better in another. Worse: a handout that should not
+  have gone out has already been graded by the time anyone notices, and deleting it would delete
+  the responses with it. Better: replacing the content is usually the right fix anyway, and the
+  content hash means the old grades are marked stale rather than silently reattached.
+- The right shape is therefore probably *withdraw* (hide from students, keep the responses) rather
+  than *delete*. Not urgent, and not in step 4's scope.
+
 ---
 
 ## Resolved
@@ -570,3 +618,9 @@ Still open: **B2** and **B3** (both resolve by accident during a class), **D7** 
 time-limited — see the note there), **A1**/**A2** (pre-existing test failures), **D2**/**D2b**
 (allowances), **D4** (plan consolidation), **D5** (four student addresses), and new from using
 the deployed app: **E1** (TA cannot post to the Library board).
+
+**2026-08-23, step 4 (feedback handouts):** three new entries, all prerequisites rather than
+defects — **D8** (`HANDOUT_SALT` unset, and the trap in ever changing it), **D9** (the IRB
+question, whose deadline is the first handout), **E7** (no way to withdraw a handout). **D5b**
+gained a consequence: without a `STUDENTS` slot a student is now refused handouts outright
+rather than merely spawning in the wrong room.

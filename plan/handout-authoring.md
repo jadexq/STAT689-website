@@ -59,10 +59,15 @@ version at two versions, two at three. Same rotation, same files, fewer of them.
 
 ### What the student is asked
 
-After each section, a **1–5 grade** and a comment box. A grade of 3 or below also offers a short
-tag list — *too abstract, too difficult, too simple, too long, missing examples, poor
-organization, unclear notation*. Nothing is required beyond the grade, there is no submit button,
-and answers save as they are given.
+The handout appears as a link in a **📝 Handouts** panel in their own office, and opens in its own
+tab. After each section, a **1–5 grade** and a comment box. A grade of 3 or below also offers a
+short tag list — *too abstract, too difficult, too simple, too long, missing examples, poor
+organization, unclear notation*; raising the grade above 3 clears any tags rather than hiding
+them. Clicking the chosen grade again clears it.
+
+**Nothing is required, including the grade.** There is no submit button and answers save as they
+are given, so a comment left without a grade is kept — it is usually the most useful thing on the
+page. A record with no grade exports, and is skipped when preference pairs are derived.
 
 There is no comparison step: a student never sees a second version of anything. Write each version
 as if it were the only one.
@@ -267,9 +272,15 @@ It warns, and continues, on a spread over 20% between the shortest and longest v
 section — that one is a judgement call, not an error. Read the warnings; at six versions this is
 the check that slips.
 
-Output is `nanogpt-attention.handout.json` next to the folder. Upload it from the admin panel.
-Re-uploading the same `handout_id` replaces the content and leaves existing responses in place,
-which is why the content hash matters.
+Output is `nanogpt-attention.handout.json` next to the folder. Upload it from the **📝 Handouts**
+box in the admin panel; the server validates it a second time, so a bundle hand-edited after
+bundling is refused too.
+
+Re-uploading the same `handout_id` replaces the content and leaves existing responses in place —
+that is how a typo gets fixed. It is also exactly why the content hash matters: a record made
+against the old text keeps its own hash, so the feedback dashboard marks it *edited since graded*
+and the derived-pairs export drops it. An edit **splits** the dataset rather than rewriting it,
+which is the honest outcome but still a smaller dataset than you were expecting.
 
 ---
 
