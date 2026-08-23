@@ -79,37 +79,29 @@ configured": it scanned the PARENT dir `/Users/jadewang/Documents/teaching/STAT6
 not a git repo. The repo and its `origin` live in `course_website/`. Anything in that proposal
 resting on "no remotes" is built on a wrong premise — say so before it gets applied.
 
-## 2. Re-upload the handout bundle (prerequisite for checks 5 and 6)
-The wipe took the old one. Regenerate — it is gitignored, so not in the image:
-    cd virtual_space && npm run bundle:handout fixtures/handout-sample
-Produces `fixtures/handout-sample.handout.json` (~12.7 KB). Upload via the admin panel as
-jadexqwang@gmail.com. Then grade at least one section as Tester so check 5 has a row.
+## 2. Re-upload the handout bundle — DONE 2026-08-23 ~22:40Z
+Uploaded through the admin panel as jadexqwang@gmail.com: `sample-attention: 2 sections ×
+3 versions`. Verified durable — it is inside `gs://stat689-data/state/current.tar.gz`.
+STILL OUTSTANDING, and it is yours: **grade at least one section signed in as Tester**
+(jadewang@tamu.edu). Nothing else closes checks 5 and 6.
 
-## 3. Stage 7 checks (§15i of gcp-deployment-plan.md) — 4, 5, 6 need a signed-in browser; 9 is done
-  4. **Maths renders**, not raw `$…$`. CANNOT BE TESTED VIA A READING AS THINGS STAND: the
-     corpus is `agenda.md` + `attention-intro.md`, and **neither contains a single `$`**. The
-     handout fixture is where the math is (`fixtures/handout-sample/sections/qkv.*.md`), so
-     check 4 = open the handout as a student and look at the qkv section. To test the NEW
-     reading path from `4867703`, upload a reading containing `$…$` first — worth doing once,
-     since it is the only surface where a regression would reach a student before you.
-  5. `/admin/handouts/sample-attention?names=1` shows **Tester**, not a bare hash.
-  6. **Durability across a restart.** Let it scale to zero (~15 min idle), sign back in,
-     confirm the graded record survived. The ONLY test of whether handout responses are durable.
-     Cheaper than a redeploy and also exercises the SIGTERM final flush.
-  9. **PASSED 2026-08-23** — idle out of the TA office lands you in your OWN office (E8).
-     Running it exposed that the step-3 assertion could not prove E8 (Ana has no slot, so her
-     "own room" is the commons); `59ff49d` adds step 6, which puts a *rostered* student in the
-     TA office and confirms `office-s6`. That is the call site E8 fixed. Re-run with:
-         SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10 npm run dev     # server, port 2567
-         SOLO_IDLE_S=8 IDLE_TEST_STUDENT=jadewang@tamu.edu npx tsx scripts/idle-test.ts
-     **There is no `test:idle` npm script** — virtual_space has only `build:client`, `dev`,
-     `start`, `bundle:handout`. (`npm run test:materials` exists, but in **virtual_ta**.)
-     Restart the space server between runs; the suite is not idempotent inside the 2-min
-     reconnect window.
-Check 2's visible half (office labelled with the student's name) can be folded into any of these.
-I cannot drive these: the `iap-probe` service account was deleted at teardown 2026-08-22, so
-there is no programmatic path through IAP. Offer Claude-in-Chrome against the user's signed-in
-Chrome, or have them run it and report.
+## 3. Stage 7 — 7 of 9 PASS as of 2026-08-23. Full table in §15i of gcp-deployment-plan.md.
+Passed this pass: 2 (visible half), 3, 4 (both handout and reading), 7, 8. Already had: 1, 9.
+  5. **PARTIAL.** `/admin/handouts/sample-attention?names=1` renders and resolves the roster by
+     name — "Not answered at all: **Tester**". Needs one submitted answer to finish.
+  6. **Mechanism proven, record not.** `[sync] restored` at boot + the bundle verified inside
+     `current.tar.gz`. A handout *response* has still never round-tripped.
+Both remaining checks need the same single action: sign in as jadewang@tamu.edu and answer a
+section. **I cannot do this for you** — `?as=` is ignored when TRUST_IAP_HEADER is set
+(identity.ts:248), so the admin session cannot impersonate a student. That is correct behaviour.
+
+NEW DEFECT, filed as E9: check 8 passed but exposed that the TA answers formula questions in
+`\[…\]` / `\(…\)`, which the chat pane does not render — the student sees raw LaTeX. Checks 4
+and 5 look at pages the instructor writes; check 8 was the only one that looked at what the model
+emits, which is where the fault was.
+
+LEFTOVER TO CLEAN UP: the test reading `notation-note` ("TEST — delete before class") is in the
+corpus. No delete route (E7). The pre-class bucket wipe removes it — do the wipe after, not before.
 
 ## 4. <test-2>'s IAP grant — USER'S DECISION, do not act unasked
 Still granted. Leaving it lets that person sign into a space containing real students; they

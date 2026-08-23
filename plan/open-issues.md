@@ -693,6 +693,32 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 - Planned as part of [`app-changes.md`](./app-changes.md) 2026-08-23, "A person's name, everywhere
   the character's placeholder shows".
 
+### E9. The TA writes maths in a dialect nothing renders, on the surface students use most
+- [ ] **Open. Found 2026-08-23 running Stage 7 check 8 against the deployed service.**
+- Asked a question whose answer is a formula, the TA replied with
+  `\[ \tau = \sqrt{d_k}, \]` and `\(\text{Attention}(Q,K,V)=\ldots\)`. The student sees those
+  backslashes and braces literally. The answer was *correct* and correctly cited — it is only
+  unreadable.
+- **Two independent faults, and fixing either alone leaves it broken:**
+  1. The space chat pane renders no maths at all. `render.ts` is server-side, for whole pages;
+     the chat bubble is client-side and has never linked KaTeX.
+  2. Nothing tells the model which delimiters to use, and left alone it reaches for
+     `\[…\]` / `\(…\)`. The renderer in `render.ts` implements `$…$` / `$$…$$` and would not
+     match these even if the chat pane called it.
+- **Why this matters more than [E3](#e3), which it otherwise resembles.** E3 is bullet markers in
+  prose — untidy. This is a course *about attention and transformers*: "what is the scaling
+  factor" is a question the TA will be asked in week one, and the answer is a formula every time.
+  E3's mitigation (ask the coach prompt for conversational prose) does not apply, because there is
+  no prose form of an equation.
+- Not caught earlier because check 4 was written as "open a handout/reading and confirm the maths
+  renders". Both of those surfaces pass. The TA's *own* output was never on the list — the checks
+  covered the pages the instructor writes and not the text the model generates.
+- **Cheapest honest fix is (2) alone:** tell the coach prompt to write maths in `$…$`, which makes
+  the output match the dialect the rest of the app already speaks. It still shows raw in chat
+  until (1) lands, but it then renders correctly everywhere the text is later displayed, and it
+  stops the two halves drifting further apart.
+- **Resolved when:** a formula asked of the TA in the space chat is readable to a student.
+
 ---
 
 ## Resolved

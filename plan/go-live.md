@@ -84,15 +84,26 @@ during it. This cannot be checked from the deploy side.
       Wipe the bucket in the same pass, or accept a permanently anonymous row.
 - [ ] **Decide whether the test account keeps IAP access.** Leaving it means that person can
       sign into a space containing real students. Revoking is one command and reversible.
-- [ ] **Stage 7 checks 4, 5, 6 passed** (`gcp-deployment-plan.md` §15i) — all need a signed-in
-      browser. Check 6 — durability across a restart — is the only test of whether handout
-      responses survive at all, and it is free: let the service scale to zero, sign back in,
-      confirm the records. **Check 9 passed 2026-08-23** (E8, via `scripts/idle-test.ts` step 6).
+- [ ] **Stage 7 finished.** Seven of nine passed 2026-08-23 (§15i has the table). **Only two are
+      left, and both need one thing from you: sign in as the student and answer a handout
+      section.** That single act closes check 5 (a real name against a real record) and check 6
+      (let it then scale to zero, sign back in, confirm the answer survived). Check 6 is the only
+      test of whether handout responses are durable at all — the flush and restore machinery is
+      already proven, a *response* is not. The instructor's admin account cannot substitute:
+      `?as=` is ignored under IAP, by design.
 - [ ] **Branch merged to main.** `multi-user-and-deploy-prep` is pushed; `main` is the one
       lagging. Merge only after Stage 7 passes. Deploy is `--source=.`, so what runs in
       production is a working tree, not a tag — keep the branch pushed so it is reproducible.
 - [ ] **Course materials uploaded.** The TA answers from the corpus; a near-empty one makes its
       first impression "it does not know anything about this course".
+- [ ] **Test reading `notation-note` removed.** Uploaded 2026-08-23 to prove the corpus path.
+      Titled "TEST — delete before class" so it is obvious in the Library. There is no delete
+      route (E7), so the bucket wipe above is what takes it — do that wipe *after* this, not
+      before.
+- [ ] **Decide what to do about [E9](./open-issues.md#e9)** — the TA answers formula questions in
+      `\[…\]`, which renders as raw backslashes in the chat. In a course on attention that
+      question comes up in week one. The one-line mitigation is to tell the coach prompt to write
+      `$…$`; the full fix needs KaTeX in the chat pane.
 - [ ] **Class told the handout data is not anonymous to the instructor.** With one reader per
       version, the version identifies the student. The dashboard says so; the students should
       hear it from you before they write a comment they think is anonymous.
