@@ -36,13 +36,17 @@ same way: an old entry is *supposed* to describe how things were on that date.
 ## 2026-08-23 · Feedback handouts — per-student versions, per-section judgement
 
 **Status:** **shipped 2026-08-23**, verified locally — `b87a6e2` (4a), `ba1c2fe` (4b), `afe0666`
-(4c), `b316963` (4d and the suite). All six existing suites green plus a seventh,
-`scripts/handout-test.ts`, 83 assertions. **Not deployed**, and until it is, no student can
+(4c), `b316963` (4d and the suite), then `084baff` (carry `?as=` on every call that depends on
+who is asking) and `f0bfbd0` (salt fingerprint, and attribution said plainly — see the two
+sections at the end of this entry). All six existing suites green plus a seventh,
+`scripts/handout-test.ts`, 94 assertions. **Not deployed**, and until it is, no student can
 reach any of it: every part of this is student-facing and students reach the app only through
 Cloud Run. Design settled in
 [`gpt_student_feedback_handout_model_design.md`](./gpt_student_feedback_handout_model_design.md);
-this entry is the executable half, and **diverges from it in one place** — see decision 6, which
-drops the pairwise probe that document recommends. Authoring rules for the handouts themselves
+this entry is the executable half, and **diverges from it in two places**: decision 6 drops the
+pairwise probe that document recommends, and the attribution section at the end contradicts its
+claim that hashing the email makes students "provide more honest feedback" — at one reader per
+version it does not, and the app now says so on the page rather than banking on it. Authoring rules for the handouts themselves
 live in [`handout-authoring.md`](./handout-authoring.md) — the instructor writes them, the app never
 generates them.
 
@@ -159,6 +163,15 @@ the environment, never in the dataset and never in git. With no salt set the han
 return 503 and say why; they do **not** fall back to an unsalted hash, and they do not take the
 rest of the campus down with them. In DEV identity mode a fixed dev salt is used and the boot
 line says so loudly, because a local suite must still be able to run.
+
+**Added after shipping, because a missing salt was never the dangerous case.** *Changing* one is:
+every hash moves, so every recorded version assignment and every collected grade becomes an
+orphan under a hash nobody holds, and nothing errors — the dashboard simply shows fewer responses
+than it did last week. The first response written now stamps
+`DATA_DIR/space/handouts/.salt-fingerprint`, and every handout route checks it, so a changed salt
+fails the way a missing one does: 503, naming the fix. Restoring the old value is still the only
+real recovery. Tracked as **D8** in [`open-issues.md`](./open-issues.md), which also carries the
+one `openssl rand -hex 24` the deploy needs.
 
 **4. Handouts are bundles, not directories, because of how the container is restored.**
 `docker/sync.mjs` restores one `current.tar.gz` and overwrites it on the next flush, so files
@@ -309,8 +322,8 @@ message; the same lesson 3a learned from 2b.
   "content_sha": "4a71…",
   "generation": { "model": "…", "prompt_template": "…", "temperature": 0.7, "generated": "2026-09-01" },
   "learning_objective": "…",
-  "grade": 2,
-  "tags": ["too_abstract", "missing_examples"],
+  "grade": 2,                                   // 1-5, or null — see finding 3
+  "tags": ["too_abstract", "missing_examples"], // only at a grade of 3 or below
   "comment": "…",
   "ts": "2026-09-02T14:11:03Z"
 }
@@ -387,10 +400,19 @@ versions and six raters. It asserts the properties that cannot be eyeballed:
 - an export line round-trips: every field present, `content_sha` matching the rendered bytes,
   `learning_objective` identical across every version of a section;
 - the derived-pairs export produces no pair whose two sides differ in `section_id` or objective,
-  and drops ties rather than breaking them arbitrarily.
+  and drops ties rather than breaking them arbitrarily, and a version **edited since it was
+  graded** drops out of the pairs while its record survives;
+- restarting on the same data with the same salt is fine, a **changed** salt stops the routes and
+  says why, and a new salt on an empty tree is still free;
+- the dashboard names who has answered nothing, counts only **assigned** slots as the cohort,
+  shows no names by default, and says in the page that the data is not anonymous to the reader.
 
 Plus the existing six suites unchanged — this adds routes, not behaviour, to anything already
 tested.
+
+The suite also **refuses to run against a server it did not start**. That is not tidiness: the
+first version killed `npx` rather than the process group, so a failed run left its server holding
+the port and the next run asserted against the previous run's data. See the finding above.
 
 ### Not in scope
 

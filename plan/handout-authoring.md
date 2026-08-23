@@ -284,7 +284,31 @@ which is the honest outcome but still a smaller dataset than you were expecting.
 
 ---
 
-## 8. Before you generate the first one
+## 8. What to tell the students, once
+
+One sentence in week 1, before the first handout. It is not a formality — the design depends on
+their judgement being candid, and the wrong version of this sentence is the one that quietly
+costs you that.
+
+> Your feedback is stored under a pseudonym. I can tell who wrote what if I need to, and I am not
+> going to go looking — I read the comments to decide what to rewrite. I *will* see who has not
+> answered.
+
+**Say it that way because it is true and the alternative is not.** Each student reads a different
+version of each section, so within a section the version *is* the student — anyone with the class
+list can work out who said what by arithmetic. The salted hash keeps an exported dataset opaque to
+someone who does not have the class list; it does not, and cannot, hide anything from you. The
+feedback dashboard says the same thing on the page, and hides names by default only because
+judging the writing goes better when you do not know whose reaction you are reading.
+
+There is no IRB step here **as long as this stays inside the course**. It becomes human-subjects
+research the moment the results are aimed at an audience outside it — a paper, a talk, a figure in
+a grant — and the exemption cannot be applied backwards, so that decision has to be made *before*
+a handout goes out, not before the writing starts. See `open-issues.md`, D9.
+
+---
+
+## 9. Before you generate the first one
 
 - Decide the **six approaches** and keep them fixed across the first few handouts. Six approaches
   held steady over three handouts is a readable result. A different six each week is eighteen
@@ -298,7 +322,7 @@ which is the honest outcome but still a smaller dataset than you were expecting.
 
 ---
 
-## 9. Checklist
+## 10. Checklist
 
 - [ ] `handout_id` new and never used
 - [ ] four to six sections
@@ -310,3 +334,4 @@ which is the honest outcome but still a smaller dataset than you were expecting.
 - [ ] `prompts.md` records what each template said
 - [ ] `npm run bundle:handout` passes clean, warnings read
 - [ ] you read all six of one section and could not rank them in advance
+- [ ] the class has been told, once, how the feedback is stored (§8)

@@ -60,6 +60,16 @@ Then open **http://localhost:2567**.
   that matters is the student's conversation with the TA. That one lives on
   the TA side, one file per person: `../virtual_ta/data/logs/space_<email>.jsonl`,
   with the student's name and email on every turn.
+- **Feedback handouts.** The instructor writes a handout in several versions outside the app
+  (see [`../plan/handout-authoring.md`](../plan/handout-authoring.md)), validates the folder into
+  one bundle with `npm run bundle:handout <dir>`, and uploads it from the admin panel. Each
+  student is assigned one version per section by a fixed rotation — recorded at first render,
+  never recomputed — and grades each section 1–5 with an optional comment. The instructor reads
+  the result at `/admin/handouts/<id>`, worst section first, and exports it as JSONL records or
+  as derived preference pairs. **The data is not anonymous to the instructor**: with one reader
+  per version the version identifies the student, and the dashboard says so rather than implying
+  otherwise. Nothing here touches the TA — a TA outage takes the chat down and leaves handouts
+  working.
 - **Idle tabs disconnect after 15 minutes** and offer a Rejoin button.
   Cloud Run bills an instance for as long as *any* WebSocket is open, so a
   laptop left open over a weekend would otherwise cost ~48 hours against a
@@ -77,6 +87,8 @@ for the full list. Beyond the LLM settings and `TA_BASE_URL`:
 | `ADMIN_EMAILS` | Instructor allowlist. Behind IAP, empty means nobody is an instructor; locally it defaults to `DEV_USER`. |
 | `ROSTER` | `email:Name` pairs for avatar labels. Without one, the name is guessed from the address. |
 | `DEV_USER` | Who you are when not behind IAP (default `jade@local`). |
+| `STUDENTS` | `email=slot` pairs — which student character each address controls (`s1`…`s5`, `jade`). Assigning a slot removes its AI stand-in. An address with no slot spawns in the Common Area **and is refused every handout**. |
+| `HANDOUT_SALT` | Salts the student hash on feedback records. Required behind IAP — the handout routes 503 without it rather than fall back to an unsalted hash over six known addresses. **Set once, never change it:** every hash moves with it. The app refuses to serve handouts if it disagrees with the data already on disk. |
 | `DATA_DIR` | Root for everything mutable. Unset locally (uses `data/`); a plain writable directory in the container. Not a bucket mount — see `../docker/sync.mjs`. |
 | `SNAPSHOT_URI` | Where that root is snapshotted (`gs://…` or `file://…`). Unset means no sync, which is right locally. |
 | `SNAPSHOT_FLUSH_MS` | Upload at most this often, and only when something changed. Default 120000. |
@@ -106,6 +118,10 @@ Last full pass: 2026-08-21.
 ```
 server/   Colyseus world: movement, same-room chat, admin, agents, JSONL logging
           ta.ts — HTTP client for the Virtual TA brain
+          handouts.ts       — handout store, version rotation, records, exports
+          handout-format.ts — the bundle format and its validator (no deps but crypto,
+                              so the bundler can run without a configured app)
+          handout-render.ts — the handout page, the grading widget, the dashboard
 client/   Phaser game + chat + admin panel (bundle built by esbuild)
 fixtures/ handout-sample/ — a tracked handout the suite runs against, plus
           handout-bad/* which the bundler must refuse
