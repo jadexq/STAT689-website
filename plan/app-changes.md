@@ -35,10 +35,16 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Announcements, a real Library, and the project repo
 
-**Status:** **steps 1-3 not started.** Two pieces of *enabling* work have landed so the plan
-could be checked against real documents rather than a fixture: `7e4b2c0` (a `MATERIALS_DIR`
-override and `npm run test:materials`) and `7539de7` (test fixtures gitignored). Neither is part
-of steps 1-3; both are what turned 2f from an estimate into a measurement.
+**Status:** **step 1 shipped 2026-08-23**, verified locally — `30dfd60`, `a5278ab`, `bf9f13c`,
+`2786317`, plus the suite commit. **Steps 2-3 not started.** **Not deployed.** Two pieces of
+*enabling* work landed first so the plan could be checked against real documents rather than a
+fixture: `7e4b2c0` (a `MATERIALS_DIR` override and `npm run test:materials`) and `7539de7` (test
+fixtures gitignored); both are what turned 2f from an estimate into a measurement.
+
+**What step 1 cost that the plan did not predict:** one latent bug, found by building 1d. Board
+item ids were `post-<ms>-<list length + 1>`, unique only while lists grew — and unpinning shrinks
+one, so a later post could reuse a live id and an unpin would then remove the wrong item. Nothing
+could have hit it before there was a way to remove an item. Replaced with a counter.
 **Scope:** three of the four features the instructor described. The fourth — interactive
 handouts that students fill in and submit — is deliberately held back; see *Held back*.
 
