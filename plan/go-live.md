@@ -84,11 +84,13 @@ during it. This cannot be checked from the deploy side.
       Wipe the bucket in the same pass, or accept a permanently anonymous row.
 - [ ] **Decide whether the test account keeps IAP access.** Leaving it means that person can
       sign into a space containing real students. Revoking is one command and reversible.
-- [ ] **Stage 7 checks 4, 5, 6, 9 passed** (`gcp-deployment-plan.md` §15i). Check 6 —
-      durability across a restart — is the only test of whether handout responses survive at
-      all, and it is free: let the service scale to zero, sign back in, confirm the records.
-- [ ] **Branch merged to main and pushed.** Deploy is `--source=.`, so an unpushed working tree
-      is the only copy of what is running.
+- [ ] **Stage 7 checks 4, 5, 6 passed** (`gcp-deployment-plan.md` §15i) — all need a signed-in
+      browser. Check 6 — durability across a restart — is the only test of whether handout
+      responses survive at all, and it is free: let the service scale to zero, sign back in,
+      confirm the records. **Check 9 passed 2026-08-23** (E8, via `scripts/idle-test.ts` step 6).
+- [ ] **Branch merged to main.** `multi-user-and-deploy-prep` is pushed; `main` is the one
+      lagging. Merge only after Stage 7 passes. Deploy is `--source=.`, so what runs in
+      production is a working tree, not a tag — keep the branch pushed so it is reproducible.
 - [ ] **Course materials uploaded.** The TA answers from the corpus; a near-empty one makes its
       first impression "it does not know anything about this course".
 - [ ] **Class told the handout data is not anonymous to the instructor.** With one reader per
