@@ -33,6 +33,163 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ---
 
+## 2026-08-22 · Announcements, a real Library, and the project repo
+
+**Status:** **planned** — no code written. This entry exists to be reviewed before any is.
+**Scope:** three of the four features the instructor described. The fourth — interactive
+handouts that students fill in and submit — is deliberately held back; see *Held back*.
+
+### What the instructor asked for
+
+1. **Shared course material and a course agenda**, available to every student, in the Library —
+   and readable by the TA, so questions can be answered from them.
+2. **A GitHub repo** (or a few) shared in the Computer Lab for a class project everyone
+   contributes to.
+3. **A board in each student's room** carrying messages from the instructor — homework posted,
+   deadlines, and so on.
+
+### Three decisions taken during review, which shrank the work considerably
+
+**Google Drive is out.** Two facts settle it. The TA's grounding pipeline reads *files on disk*
+listed in `manifest.json` (`virtual_ta/server/materials.ts`); a Drive URL is opaque to it, and
+making it readable means a service account, the Drive API, Docs→text export, and change
+polling. And Google stopped serving HTML from Drive in 2016 — a `.html` there previews as source
+or downloads, it does not execute. So the interactive-handout idea, which is the only thing
+Drive was really being asked to enable, **cannot work on Drive at all.** Drive stays useful as
+the instructor's own authoring and archive space. The app does not read from it.
+
+**The project repo is public.** The instructor's call, and it removes invitations, GitHub
+username collection, and the read-only-`GITHUB_TOKEN` problem in one move. It also lets the app
+fetch the README with no credentials. Two costs, both outside the app and both accepted: commit
+metadata makes class enrollment publicly inferable, and branch protection on `main` matters more
+rather than less when the repo is a public portfolio piece.
+
+**Announcements are class-wide, not per-student.** The instructor's own simplification and the
+most valuable of the three. A per-student board would have needed a visibility rule — a board in
+an office is readable by whoever is standing in the office, and students will be able to walk
+around once real ones sign in. That is a FERPA rule wearing a feature's clothes. One class-wide
+feed has no such rule to get wrong. Per-student privacy returns only for handout submissions,
+which is precisely where it belongs, and which is feature 4.
+
+### The TA does not write announcements. The TA reads them.
+
+An `announce` skill already exists (`virtual_ta/server/skills/announce.ts`) and is unreachable:
+`SINGLE_SKILL` returns `coach` at the top of `route()`, and the `compose` admin action was
+deleted earlier today. **Leave it dormant.** An announcement the model drafts is an announcement
+the instructor has to proofread, and a wrong due date on a board is worse than no board. Typing
+it takes ten seconds and is correct by construction.
+
+The *reverse* integration is the one worth building. Today, pin "HW1 due Friday" to a board and
+the TA has no idea it happened — posts live in `virtual_space/server/boards.ts` and never reach
+the brain. A student asking "when is HW1 due?" gets a shrug, or worse, a guess. Putting the
+announcements into the TA's prompt is a small change that does two things at once: the TA can
+answer about logistics, and it stops contradicting the board.
+
+### Two constraints that dictate the shape of the work
+
+**Only the space server is reachable from a browser.** `docker/start.sh:40` runs the TA on
+`127.0.0.1:3000`; Cloud Run exposes one port and it is the space's. So anything a student
+clicks — a reading, the agenda — must be served *by the space*, proxying to the TA. This is why
+step 2 opens with a proxy commit rather than a UI commit.
+
+**The TA owns the corpus.** `virtual_ta/materials/` plus `manifest.json` is what `searchMaterials`
+indexes. A second copy anywhere, for the Library to render from, would drift within a month. The
+Library renders whatever `GET /api/materials` reports — one list, two consumers.
+
+---
+
+### Step 1 — Announcements
+
+The admin UI needed here mostly exists: the **"📌 Pin to a board"** card
+(`client/static/index.html:164`) is a textarea, a board dropdown, and a Pin button, and it is
+location-independent — the message names its target, so the instructor posts from wherever they
+are standing. No walking, no puppeting the TA. It has two gaps.
+
+| # | Commit | What changes | Files |
+|---|---|---|---|
+| 1a | **`announcements` becomes a board target** | A feed that is not a room. The six offices get `hasBoard: true`; resolving an office's board returns the announcements feed. The dropdown gains **📣 Announcements — all students** above the two rooms. One stored item, six display points — so editing or deleting later stays one action, not six. | `server/boards.ts`, `server/map.ts`, `server/rooms/MainRoom.ts`, `client/src/main.ts`, `client/static/index.html` |
+| 1b | **Board posts are signed by the instructor** | Posts are currently attributed to `this.ta().name` (`MainRoom.ts:644`), so text the instructor typed appears over the TA's name. Every board post is typed by a human; all of them get signed **"Jade Wang · Instructor"**. Not cosmetic: students must be able to tell an instructor's statement from an LLM's, and that distinction becomes load-bearing the first time the TA is confidently wrong. | `server/boards.ts`, `server/rooms/MainRoom.ts` |
+| 1c | **The TA reads the announcements** | `taChat` gains an optional `context` block; `/api/chat` accepts it; it rides on `Session` as a per-request transient so no skill signature changes. `coach.ts` includes it in all three of its system prompts, with one rule: *for logistics — dates, deadlines, what is assigned — the announcements are authoritative over anything in the readings.* Capped at the 10 most recent items / ~1,500 chars. | `virtual_space/server/ta.ts`, `virtual_space/server/rooms/MainRoom.ts`, `virtual_ta/server/index.ts`, `virtual_ta/server/session.ts`, `virtual_ta/server/skills/coach.ts` |
+| 1d | **The instructor can see and unpin what they posted** | The admin has no avatar and stands in the TA office, so they can never *walk* to an announcements board and read it back. The post card lists the current feed with an ✕ per item. New `admin` action `unpin`. Without this, a typo is permanent. | `server/rooms/MainRoom.ts`, `server/boards.ts`, `client/src/main.ts`, `client/static/index.html` |
+| 1e | **Tests** | `integration.ts` step 1 asserts board count `=== 2`; becomes 8. New step: admin pins an announcement → a student in their own office sees it → the same student asks the TA about it in the TA office and the answer contains the date. That last leg is the only test that proves 1c end to end. | `virtual_space/scripts/integration.ts`, `virtual_space/scripts/smoke.ts` |
+
+**Why 1d is not optional:** it is the only commit here that exists purely because the instructor
+is not embodied. Everything else in step 1 would work without it, and the instructor would
+discover on day one that they cannot read their own noticeboard.
+
+### Step 2 — Course material and the agenda
+
+| # | Commit | What changes | Files |
+|---|---|---|---|
+| 2a | **The space proxies the corpus** | `GET /api/materials` (list, forwarded to `TA_BASE_URL`) and `GET /api/materials/:id/file` (bytes). The browser cannot reach the TA; this is the bridge. Path traversal is already refused inside `materials.ts`, and `:id` is looked up in the manifest rather than joined onto a path, so the proxy adds no new file-system surface. | `virtual_space/server/index.ts` |
+| 2b | **The Library board becomes the materials shelf** | Rendered from the proxied list — title, one line, a link the space serves — rather than from hand-typed posts. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in the same step. That single-source property is the entire reason for 2a. | `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
+| 2c | **`agenda.json`, rendered as a schedule** | The agenda is *not* a PDF. Structured source (`week`, `date`, `topic`, `readings: [id]`, `due`) rendered two ways: a schedule table at the top of the Library, and a flat text block generated for the TA. One file to maintain, two renderings, no drift. A PDF would make "what should I read before Thursday?" unanswerable, which is most of the value. | `virtual_ta/materials/agenda.json`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
+| 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Always included rather than retrieved — it is small, and it is the one document where retrieval missing it produces a *confidently wrong* answer about a deadline rather than a vague one. | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
+| 2e | **Upload without a redeploy** *(droppable)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
+
+**On 2e:** it is the difference between "adding a reading is a git commit and a deploy" and
+"adding a reading is a drag and drop". Worth having before the semester, not necessarily before
+the next test. Flagged droppable rather than dropped.
+
+### Step 3 — The project repo in the Computer Lab
+
+| # | Commit | What changes | Files |
+|---|---|---|---|
+| 3a | **Repo cards on the Computer Lab board** | A small `repos.json` (name, one-line description, URL) rendered as cards, instead of a raw pasted link. Config rather than a board post, so it survives a `boards.json` wipe — and D7 wipes state before the first class. | `virtual_space/server/repos.json`, `server/rooms/MainRoom.ts`, `client/src/main.ts` |
+| 3b | **The README joins the corpus** | Fetch the public repo's README at boot and on a slow interval, cache it under `DATA_DIR`, register it as a reading. Then "how do I contribute to the project?" is a grounded answer rather than a shrug. Public repo means no token. **The fetch must not block startup** and must fall back to the cached copy — a GitHub outage cannot be allowed to stop the class server from booting. | `virtual_ta/server/materials.ts`, `virtual_ta/server/repo.ts` |
+
+### Consequences to accept
+
+1. **Every student message to the TA now carries the announcements and the agenda.** Small, but
+   it is on every single turn. Capped as above; revisit if the feed grows.
+2. **Existing posts in `boards.json` are signed "TA"** and 1b does not rewrite them. They are
+   local test data, and `open-issues.md` D7 wipes state before the first class anyway.
+3. **`/api/chat` gains an optional field.** The TA's own web client on `:3000` will not send it;
+   the prompt must degrade cleanly to no-context rather than emitting an empty section header.
+4. **`MAX_ITEMS = 50` is now shared** between announcements and the two room boards. Fine for a
+   semester; noted so it is not a surprise.
+5. **A public repo makes enrollment publicly inferable.** Outside the app. Worth telling students
+   in week 1, and letting anyone who objects contribute under a pseudonymous account.
+
+### Verification
+
+Existing suites, plus the new leg in 1e. `npx tsc --noEmit` clean. The order-dependency rule
+still holds — the first four suites run against a fresh server, in order.
+
+| Suite | What it must show after this |
+|---|---|
+| `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
+| `integration` | board count 2 → 8; the announcement→TA leg from 1e |
+| `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
+| `materials-test` | agenda indexed and retrievable; README present after 3b |
+| `idle-test` | unchanged |
+
+### Held back — feature 4 (handouts with saved answers)
+
+Not in this plan, by agreement. Recorded here so the shape is not re-derived later: the handout
+is an HTML page **served by the app**, given an injected `save()` / `load()` shim, POSTing answers
+that land in `DATA_DIR` keyed by student email, with an instructor view of submissions. It is
+*less* work than the Drive route and the Drive route cannot do it at all. It is also the feature
+that earns a proper instructor console — assigning, and reading six students' submissions, is
+form-work that does not belong on a 2-D map. Student answers are coursework: same private bucket
+and same FERPA footing as the conversation logs.
+
+### Decisions taken on the instructor's behalf — overturn any of these
+
+1. **Announcements appear in the six offices only, not also in the Library.** Reversed from what
+   I said in conversation. Students spawn in their own room, so an announcement is the first
+   thing they see at sign-in, and the feed keeps 50 items — the Library copy added a merge rule
+   against the materials shelf for no reach the offices did not already have.
+2. **All board posts get instructor attribution, not just announcements.** Consistent and honest,
+   since a human types all of them. Say so if the Library and Lab posts should stay signed "TA".
+3. **The agenda is JSON, not markdown.** Structured beats prose here because two consumers render
+   it. Costs a little authoring comfort.
+4. **`repos.json` is config, not a board post** — so a state wipe does not silently empty the
+   Computer Lab.
+5. **The `announce` skill stays dormant rather than being deleted.** Same pattern as `classroom`.
+
+---
+
 ## 2026-08-22 · Simplify the TA: one room, one mode, one job
 
 **Status:** **shipped 2026-08-22**, verified locally. Six commits, `6d241cc`..`3ee84f6`.
