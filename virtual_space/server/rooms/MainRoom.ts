@@ -9,22 +9,28 @@
 //
 // Roles:
 //   student — has an avatar; normal chat & movement.
-//   admin   — NO avatar; keyboard/mouse drive the TA; chat is either
-//             🔒 private to the TA brain or 🗣 spoken aloud as the TA.
-//             Admin-only: direct agents, compose/post board items, mic.
+//   admin   — NO avatar; chat is either 🔒 private to the TA brain or
+//             🗣 spoken aloud as the TA, in the TA office. Admin-only:
+//             direct agents, pin board posts, mic.
 //             Determined by the ADMIN_EMAILS allowlist ALONE: an instructor
 //             IS the TA, with no student view to switch to. The client has
 //             no say — a student asking for admin just gets an avatar.
 //
-// The TA's replies come from the Virtual TA brain (ta.ts) with one session
-// per student; the room they stand in can force a skill. Board posts are
-// composed by the announce skill, previewed to the admin, and pinned to a
-// room's board — students see the board when they walk in (no global
-// fan-out anymore).
+// THE TA DOES NOT MOVE. Not for students, not for the instructor. Every
+// conversation with the TA therefore happens in the TA office, which a
+// student has to walk into. The instructor drove the TA around until now,
+// so this also pins the instructor in place — accepted deliberately: a
+// rule that holds only when nobody is looking is not a rule, and the two
+// features that depend on it (walk-in access, one student at a time) both
+// collapse without it. See plan/app-changes.md, 2026-08-22.
+//
+// The TA's replies come from the Virtual TA brain (ta.ts), one session per
+// student. Board posts are written by the instructor and pinned to a
+// room's board — students see the board when they walk in.
 
 import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
-import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, forcedSkillAt, findPath } from "../map";
+import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, findPath } from "../map";
 import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
@@ -210,6 +216,7 @@ export class MainRoom extends Room {
   private handleStep(client: Client, msg: any) {
     const e = this.focusEntity(client);
     if (!e) return;
+    if (this.refuseTAMove(client, e)) return;
     const dx = Math.sign(Number(msg?.dx) || 0);
     const dy = Math.sign(Number(msg?.dy) || 0);
     if (Math.abs(dx) + Math.abs(dy) !== 1) return;
@@ -225,12 +232,26 @@ export class MainRoom extends Room {
   private handleGoto(client: Client, msg: any) {
     const e = this.focusEntity(client);
     if (!e) return;
+    if (this.refuseTAMove(client, e)) return;
     const tx = Math.floor(Number(msg?.x));
     const ty = Math.floor(Number(msg?.y));
     if (!walkable(tx, ty)) return;
     const path = findPath({ x: e.x, y: e.y }, { x: tx, y: ty });
     if (!path || !path.length) return;
     this.walk(e, path, 130);
+  }
+
+  // The one place the "TA never moves" rule is enforced. Both movement
+  // handlers and the admin's "walk there" go through here, so a future
+  // caller that forgets is a compile-time miss, not a silent hole.
+  private refuseTAMove(client: Client, e: Entity): boolean {
+    if (e.id !== TA_ID) return false;
+    this.notice(client, "The TA stays in the TA office — walk in to talk to them.");
+    return true;
+  }
+
+  private notice(client: Client, text: string) {
+    client.send("notice", { text });
   }
 
   private walk(entity: Entity, path: { x: number; y: number }[], stepMs: number) {
@@ -303,10 +324,10 @@ export class MainRoom extends Room {
       let skill: string | undefined;
       if (agent.id === TA_ID) {
         // The TA answers with the real Virtual TA brain, one persistent TA
-        // session per student. The room they stand in may force a skill.
-        const forced = forcedSkillAt(agent.x, agent.y);
+        // session per student. No skill is forced from here any more — the
+        // brain has one skill, so there is nothing to choose.
         const who = sender.who ?? { sessionId: `space:${sender.name}`, email: "", name: sender.name };
-        const res = await taChat(who, sender.text, forced);
+        const res = await taChat(who, sender.text);
         text = res.reply;
         skill = res.skill;
       } else {
@@ -330,8 +351,7 @@ export class MainRoom extends Room {
     }
   }
 
-  // 🔒 Admin ↔ TA brain, visible only to the admin. The TA's room still
-  // forces the skill (e.g. stand them in the Prep Room and ask for notes).
+  // 🔒 Admin ↔ TA brain, visible only to the admin.
   private async adminPrivateChat(client: Client, text: string) {
     const ta = this.ta();
     client.send("chat", { from: "You → TA", id: "admin", kind: "human", text, room: "private" });
@@ -343,8 +363,7 @@ export class MainRoom extends Room {
     ta.busy = true;
     client.send("typing", { name: ta.name });
     try {
-      const forced = forcedSkillAt(ta.x, ta.y);
-      const res = await taChat(this.taWho(client, "admin"), text, forced);
+      const res = await taChat(this.taWho(client, "admin"), text);
       client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
       logEvent("chat", { who: ta.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
@@ -355,8 +374,8 @@ export class MainRoom extends Room {
     }
   }
 
-  // 🗣 The admin's words come out of the TA, verbatim, in their current room.
-  // Virtual students there may respond (it's a human-driven message).
+  // 🗣 The admin's words come out of the TA, verbatim, in the TA office —
+  // which is where any student talking to the TA already is.
   private speakAsTA(client: Client, text: string) {
     const ta = this.ta();
     const rid = roomAt(ta.x, ta.y) || "commons";
@@ -408,33 +427,10 @@ export class MainRoom extends Room {
       return;
     }
 
-    // Compose a board post via the announce skill; PREVIEW to the admin.
-    if (action === "compose") {
-      const ta = this.ta();
-      const instruction = String(msg?.instruction || "").trim().slice(0, 1000);
-      if (!instruction) return client.send("adminAck", { ok: false, note: "Write an instruction first." });
-      if (ta.busy) return client.send("adminAck", { ok: false, note: "The TA is busy — try again in a moment." });
-      ta.busy = true;
-      client.send("adminAck", { ok: true, note: "The TA is composing the post…" });
-      logEvent("admin_compose", { instruction });
-      try {
-        const res = await taChat(this.taWho(client, "admin"), instruction, "announce");
-        const text = String(res.data?.announcement || res.reply);
-        const boardsAvail = ROOMS.filter((r) => r.hasBoard).map((r) => ({ id: r.id, label: r.label }));
-        const taRoom = roomAt(ta.x, ta.y);
-        const suggested = taRoom && roomById(taRoom)?.hasBoard ? taRoom : "library";
-        client.send("postPreview", { from: ta.name, text, boards: boardsAvail, suggested });
-        client.send("adminAck", { ok: true, note: "Preview ready — edit if you like, pick a board, then post." });
-      } catch (err: any) {
-        logEvent("agent_error", { who: ta.name, error: String(err?.message || err) });
-        client.send("adminAck", { ok: false, note: "The TA's brain is unreachable — is the Virtual TA server running on port 3000?" });
-      } finally {
-        ta.busy = false;
-      }
-      return;
-    }
-
-    // Admin approved the preview: pin it to the chosen room's board.
+    // Pin the instructor's own text to a room's board. There is no compose
+    // step: the announce skill used to draft this, which meant a board post
+    // could not be made without an LLM round trip, and the wording was the
+    // model's rather than the instructor's. Typing it is faster and exact.
     if (action === "post") {
       const boardRoom = roomById(String(msg?.board || ""));
       const text = String(msg?.text || "").trim().slice(0, 4000);
@@ -460,6 +456,9 @@ export class MainRoom extends Room {
       const dest = roomById(String(msg?.dest || ""));
       if (!agent || !dest) {
         return client.send("adminAck", { ok: false, note: "Pick an agent and a destination room." });
+      }
+      if (agent.id === TA_ID) {
+        return client.send("adminAck", { ok: false, note: "The TA stays in the TA office. Send a virtual student instead." });
       }
       const path = findPath({ x: agent.x, y: agent.y }, dest.spawn);
       if (!path) {

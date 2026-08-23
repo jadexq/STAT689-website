@@ -1,6 +1,7 @@
 // End-to-end smoke test: joins as the student AND as the admin and
-// exercises the core loop — movement, same-room chat isolation, TA's
-// brain-backed replies, compose→preview→post to the Library board.
+// exercises the core loop — movement, same-room chat isolation, the TA
+// pinned in their office, brain-backed replies to a student who walks in,
+// and pinning a post to the Library board.
 //
 // Requires BOTH servers, and a FRESH space server (agents persist
 // position across client connections):
@@ -104,36 +105,44 @@ async function main() {
   admin.onMessage("board", () => {});
   admin.onMessage("chat", () => {});
   admin.onMessage("typing", () => {});
-  const previews: any[] = [];
-  admin.onMessage("postPreview", (m) => {
-    previews.push(m);
-    console.log(`  [preview → board ${m.suggested}] ${m.text.slice(0, 120)}`);
+  const acks: any[] = [];
+  admin.onMessage("adminAck", (m) => {
+    acks.push(m);
+    console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`);
   });
-  admin.onMessage("adminAck", (m) => console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`));
+  admin.onMessage("notice", () => {});
   await wait(500);
   assert(world.entities.length === 7, "admin joined without adding an avatar");
-  admin.send("admin", { action: "send", agent: "ta", dest: "commons" });
-  await waitUntil(() => at(taEnt(), spawnOf("commons")), 30000, "admin sent TA to the Common Area");
 
-  console.log("\n5. Proximity chat — TA answers from the TA brain");
+  // The TA is a fixture. Not even the instructor may walk them out, which is
+  // what makes "go to the TA office to talk to the TA" a rule rather than a
+  // habit. Assert the refusal, not just that nothing happened — a silently
+  // dropped command would look identical.
+  const ackMark = acks.length;
+  admin.send("admin", { action: "send", agent: "ta", dest: "commons" });
+  await waitUntil(() => acks.slice(ackMark).some((a) => !a.ok), 5000, "admin's request to walk the TA was refused");
+  assert(at(taEnt(), spawnOf("office-ta")), "TA never left the TA office");
+  admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
+  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("commons")), 30000,
+    "a virtual student can still be sent anywhere");
+
+  console.log("\n5. Walk into the TA office — the TA answers from the TA brain");
+  student.send("goto", spawnOf("office-ta"));
+  await waitUntil(() => at(me(), spawnOf("office-ta")), 30000, "student walked into the TA office");
   const mark = chats.length;
   student.send("chat", { text: "Hi TA! In one sentence, what should I focus on this week?" });
   await waitUntil(() => chats.slice(mark).some((c) => c.from === "TA"), 120000, "TA replied via the TA brain");
 
-  console.log("\n6. Board post: compose → preview → pin to the Library");
-  admin.send("admin", {
-    action: "compose",
-    instruction: "Post a reminder that office hours are tomorrow at 2pm.",
-  });
-  await waitUntil(() => previews.length > 0, 120000, "post composed and previewed to admin");
-  admin.send("admin", { action: "post", board: "library", text: previews[0].text });
+  console.log("\n6. Board post: the instructor's own words, pinned to the Library");
+  const POST = "Office hours are tomorrow at 2pm.";
+  admin.send("admin", { action: "post", board: "library", text: POST });
   await wait(800);
   const boardsBefore = boards.length;
   student.send("goto", spawnOf("library"));
   await waitUntil(
-    () => boards.slice(boardsBefore).some((b) => b.roomId === "library" && b.items?.length > 0),
+    () => boards.slice(boardsBefore).some((b) => b.roomId === "library" && b.items?.some((i: any) => i.text === POST)),
     20000,
-    "student walked into the Library and saw the pinned post"
+    "student walked into the Library and saw the post, worded exactly as typed"
   );
 
   console.log("\nALL SMOKE TESTS PASSED ✅");

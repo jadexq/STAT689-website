@@ -1,6 +1,12 @@
-// Coach skill (M3–M5): Socratic coaching grounded ONLY in the reading the
-// student names, plus collection of their questions into a per-reading
-// digest the instructor can ask for.
+// The TA's one skill: answer a student's question directly, grounded in the
+// course materials, saying which document the answer came from. Also collects
+// their questions into a per-reading digest the instructor can ask for.
+//
+// It used to be Socratic — hints and counter-questions, never the answer.
+// The instructor changed that on 2026-08-22: students should get an answer,
+// with the source named so they can go read it. The name `coach` stayed
+// because `session.mode` is persisted and restored from logged turns, so
+// renaming it would strand every existing conversation's sticky mode.
 
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
@@ -27,13 +33,13 @@ export async function coach(session: Session, message: string): Promise<SkillRes
     const list = readings.map((r) => `- ${r.title}${r.link ? ` (${r.link})` : ""}`).join("\n");
     const system = `${BASE_PERSONA}
 
-You are in COACHING mode, but the student has not picked an assigned reading yet.
+A student has asked you something, and no course document is in focus yet.
 Rules:
-- First, answer their message directly and helpfully — briefly, from the reading list below or general knowledge. If they ask what materials are available, list the assigned readings with their links.
-- Then close by inviting them to pick one of the assigned readings (by title or link) so you can coach them through it.
-- Do not start Socratic coaching until a reading is chosen.
+- Answer their question directly and helpfully. Be clear that you are answering from general knowledge, not from the course materials.
+- If they ask what materials are available, list the course documents below with their links.
+- If one of the documents below plainly covers their question, name it and offer to answer from it.
 
-ASSIGNED READINGS:
+COURSE MATERIALS:
 ${list}`;
     const reply = await chatLLM(system, session.history, { maxTokens: 500, temperature: 0.7 });
     return { reply };
@@ -50,13 +56,14 @@ ${list}`;
 
   const system = `${BASE_PERSONA}
 
-You are in COACHING mode, working through the assigned reading "${loaded.reading.title}" with a student before class (flipped classroom).
+You are answering a student's question about the course document "${loaded.reading.title}".
 Rules:
-- Be Socratic: guide with questions and hints; do NOT hand over full answers or summaries the student should build themselves. Confirm and extend their correct steps.
-- Ground everything strictly in the reading below. If asked about something the reading doesn't cover, say so and steer back.
-- Keep each reply short (a few sentences, at most one small code snippet), and end most replies with one probing question.
+- Answer directly and completely. Do not withhold the answer or turn it back into a question.
+- Ground the answer in the document below, and say where it comes from — quote or point to the part you used, so the student can go and read it.
+- If the document does not cover what they asked, say so plainly, then answer from general knowledge and label it as outside the course material. Never dress up general knowledge as something the document says.
+- Keep it to a few sentences plus at most one small code snippet unless they ask for more.
 
-THE READING:
+THE DOCUMENT — "${loaded.reading.title}":
 ---
 ${loaded.text}
 ---`;

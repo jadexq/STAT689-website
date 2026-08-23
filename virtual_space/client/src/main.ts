@@ -32,10 +32,9 @@ type RoomInfo = {
   y2: number;
   tint: string;
   kind: "office" | "special" | "commons";
-  forcedSkill?: string;
-  modeLabel?: string;
   hasBoard?: boolean;
   closed?: boolean;
+  soloOccupancy?: boolean;
 };
 type InitMsg = {
   tile: number;
@@ -84,9 +83,9 @@ function roomInfoAt(x: number, y: number): RoomInfo | undefined {
 }
 
 function labelFor(e: Entity): string {
-  if (e.kind !== "agent") return e.name;
-  const mode = e.id === TA_ID ? roomInfoAt(e.x, e.y)?.modeLabel : undefined;
-  return `${e.name} 🤖${mode ? ` · ${mode}` : ""}`;
+  // The TA used to carry a mode label here, set by whichever room they were
+  // standing in. They no longer leave their office and no longer have modes.
+  return e.kind === "agent" ? `${e.name} 🤖` : e.name;
 }
 
 const MINI_W = 180; // minimap width in px
@@ -532,15 +531,7 @@ function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: 
   }
 }
 
-// Post preview: composed by the TA brain; editable; pinned on approval.
-// Module-level (not closed over wirePanel's locals) so it can be re-wired
-// onto a fresh Room after a reconnect.
-function showPreview(msg: { from: string; text: string; boards: { id: string; label: string }[]; suggested: string }) {
-  $<HTMLTextAreaElement>("preview-text").value = msg.text;
-  $<HTMLSelectElement>("board-sel").value = msg.suggested;
-  $<HTMLDivElement>("preview").style.display = "block";
-}
-
+// Board posting: the instructor's own text, pinned exactly as typed.
 function chatMode(): "private" | "speak" {
   const el = document.querySelector<HTMLInputElement>('input[name="cmode"]:checked');
   return el?.value === "speak" ? "speak" : "private";
@@ -551,10 +542,10 @@ function wirePanel() {
     `You are <b>${escapeHtml(init.name)}</b> (${escapeHtml(init.email)}), a student.`;
   if (role === "admin") {
     $<HTMLDivElement>("role-sub").innerHTML =
-      "You are the <b>admin</b> — no avatar; your keyboard/mouse move the <b>TA</b>. Chat below is private to the TA or spoken as them.";
+      "You are the <b>admin</b> — no avatar. You <b>are</b> the TA, and the TA stays in the TA office. Chat below is private to the TA brain, or spoken aloud in the office.";
     $<HTMLDivElement>("admin").style.display = "block";
     $<HTMLDivElement>("chat-mode").style.display = "block";
-    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA privately, or speak as them (pick above)…";
+    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA brain privately, or speak aloud in the office (pick above)…";
   }
 
   const agentSel = $<HTMLSelectElement>("agent-sel");
@@ -596,26 +587,13 @@ function wirePanel() {
   $<HTMLButtonElement>("direct-send").onclick = () => {
     room.send("admin", { action: "direct", agent: agentSel.value, instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
   };
-  $<HTMLButtonElement>("compose-post").onclick = () => {
-    room.send("admin", { action: "compose", instruction: $<HTMLTextAreaElement>("instruction").value.trim() });
-  };
-  $<HTMLButtonElement>("quick-paper").onclick = () => {
-    room.send("admin", {
-      action: "compose",
-      instruction:
-        "Share one interesting recent AI paper or piece of AI news for the class board. Give the title and a 2-3 sentence plain-language summary of why it matters for a course on LLM agents.",
-    });
-  };
-
-  $<HTMLButtonElement>("preview-send").onclick = () => {
-    const text = $<HTMLTextAreaElement>("preview-text").value.trim();
+  // Board posts are the instructor's own words — typed here, pinned as-is.
+  $<HTMLButtonElement>("post-send").onclick = () => {
+    const box = $<HTMLTextAreaElement>("post-text");
+    const text = box.value.trim();
     if (!text) return;
     room.send("admin", { action: "post", board: boardSel.value, text });
-    $<HTMLDivElement>("preview").style.display = "none";
-  };
-  $<HTMLButtonElement>("preview-discard").onclick = () => {
-    $<HTMLDivElement>("preview").style.display = "none";
-    setAdminStatus("Post discarded.", true);
+    box.value = "";
   };
 
   $<HTMLButtonElement>("send-agent").onclick = () => {
@@ -812,6 +790,10 @@ function wireRoom(client: Client) {
 
   room.onMessage("board", renderBoard);
 
+  room.onMessage("notice", (msg: { text: string }) => {
+    addMsg({ who: "system", text: msg.text, cls: "sys" });
+  });
+
   room.onMessage("typing", (msg: { name: string }) => {
     typingFrom.add(msg.name);
     renderTyping();
@@ -823,7 +805,6 @@ function wireRoom(client: Client) {
 
   room.onMessage("adminAck", (msg: { ok: boolean; note: string }) => setAdminStatus(msg.note, msg.ok));
 
-  room.onMessage("postPreview", showPreview);
 
   room.onMessage("init", (msg: InitMsg) => {
     init = msg;
@@ -837,7 +818,7 @@ function wireRoom(client: Client) {
       who: "system",
       text:
         role === "admin"
-          ? "Connected as admin. You're driving the TA — walk them somewhere and talk to them below."
+          ? "Connected as admin. The TA waits in the TA office for students to walk in."
           : "Connected. You're in your office — walk out through the door to the halls.",
       cls: "sys",
     });

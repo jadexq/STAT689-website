@@ -20,7 +20,7 @@ import {
   type Session,
   type SkillName,
 } from "./session.ts";
-import { CLARIFY_REPLY, CLASSROOM_ENABLED, route } from "./router.ts";
+import { CLARIFY_REPLY, CLASSROOM_ENABLED, SINGLE_SKILL, route } from "./router.ts";
 import { coach } from "./skills/coach.ts";
 import { classroom } from "./skills/classroom.ts";
 import { author } from "./skills/author.ts";
@@ -91,11 +91,11 @@ app.post("/api/chat", async (req, res) => {
   pushHistory(session, "user", message);
   await logTurn({ sessionId, email, name, role: "user", skill: session.mode, readingId: session.readingId, content: message });
 
-  // An explicit, valid skill (e.g. from the virtual space's room-based
-  // modes) bypasses the router; otherwise route as usual.
-  // A disabled skill must be unreachable over the wire too: the virtual
-  // space sends room-based modes, and a stale client could still name one.
+  // A caller may still name a skill over the wire, but not while the TA is
+  // pinned to one: honouring it would reopen by HTTP exactly the modes the
+  // app just retired. A disabled skill must be unreachable over the wire too.
   const forcedOk =
+    !SINGLE_SKILL &&
     typeof forcedSkill === "string" &&
     forcedSkill in skills &&
     (CLASSROOM_ENABLED || forcedSkill !== "classroom");

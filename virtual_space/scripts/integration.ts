@@ -3,11 +3,10 @@
 //   virtual_ta:    npm run dev   (port 3000)
 //   virtual_space: npm run dev   (port 2567)
 //
-// Exercises: admin role (drive TA, private chat, speak-as-TA),
-// room-forced skills (prep / library / computer lab; the Classroom is
-// closed while its skill is on hold),
-// compose→preview→post to boards, mic → class transcript, and the
-// virtual-student reply cap. Makes ~6 real LLM calls.
+// Exercises: admin role (private chat, speak-as-TA), the TA pinned in
+// their office (nobody, instructor included, can move them), the sealed
+// rooms, pinning the instructor's own text to a board, mic → class
+// transcript, and the virtual-student reply cap. Makes ~5 real LLM calls.
 
 import { Client, Room } from "colyseus.js";
 
@@ -45,7 +44,6 @@ async function main() {
   const sChats: any[] = [];
   const aChats: any[] = [];
   const sBoards: any[] = [];
-  const previews: any[] = [];
 
   // Register each connection's handlers immediately after its join —
   // messages sent during the next await would otherwise be dropped.
@@ -76,86 +74,101 @@ async function main() {
     console.log(`  [admin sees ${m.room}${m.skill ? ` · via ${m.skill}` : ""}] ${m.from}: ${m.text.slice(0, 110)}`);
   });
   admin.onMessage("typing", () => {});
-  admin.onMessage("postPreview", (m) => {
-    previews.push(m);
-    console.log(`  [preview → ${m.suggested}] ${m.text.slice(0, 110)}`);
+  const acks: any[] = [];
+  admin.onMessage("adminAck", (m) => {
+    acks.push(m);
+    console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`);
   });
-  admin.onMessage("adminAck", (m) => console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`));
+  const notices: any[] = [];
+  admin.onMessage("notice", (m) => notices.push(m));
 
   const me = () => world.entities.find((e) => e.id === init?.you);
   const taEnt = () => world.entities.find((e) => e.id === "agent-ta");
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
-  console.log("\n1. World: 7 inhabitants, mode rooms, boards");
+  console.log("\n1. World: 7 inhabitants, boards, no room-forced skills left");
   await waitUntil(() => !!init && world.entities.length === 7, 6000, "7 inhabitants (no avatar for the admin)");
-  for (const [rid, skill] of [["prep-room", "author"], ["library", "announce"], ["computer-lab", "review"]]) {
-    assert(init.rooms.some((r: any) => r.id === rid && r.forcedSkill === skill), `${rid} forces ${skill}`);
-  }
   assert(init.rooms.filter((r: any) => r.hasBoard).length === 2, "Library and Computer Lab have boards");
+  assert(!init.rooms.some((r: any) => r.forcedSkill || r.modeLabel), "no room advertises a TA mode any more");
+  assert(init.rooms.find((r: any) => r.id === "office-ta")?.soloOccupancy === true, "TA office is solo-occupancy");
 
-  console.log("\n2. Admin drives TA");
+  console.log("\n2. The TA cannot be moved — not even by the instructor");
+  // Both routes have to be shut, and they are separate code paths: the
+  // keyboard goes through handleStep, the panel through the admin `send`
+  // action. Closing one and not the other is the likely regression.
   const t0 = { ...taEnt()! };
   admin.send("step", { dx: 0, dy: -1 });
-  await waitUntil(() => taEnt()!.y === t0.y - 1, 3000, "admin arrow key moved TA");
+  await waitUntil(() => notices.length > 0, 3000, "arrow key returned a notice instead of moving the TA");
+  assert(taEnt()!.x === t0.x && taEnt()!.y === t0.y, "TA did not move a tile");
+  const ackMark0 = acks.length;
   admin.send("admin", { action: "send", agent: "ta", dest: "library" });
-  await waitUntil(() => at(taEnt(), spawnOf("library")), 30000, "TA walked to the Library");
+  await waitUntil(() => acks.slice(ackMark0).some((a) => !a.ok), 5000, "panel refused to walk the TA");
+  assert(at(taEnt(), spawnOf("office-ta")), "TA is still in the TA office");
 
-  console.log("\n3. Admin ↔ TA private chat (room forces announce in the Library)");
+  console.log("\n3. Admin ↔ TA private chat");
   const aMark = aChats.length;
   admin.send("chat", { text: "Post a note that homework 1 is to read the attention paper, due Friday.", mode: "private" });
   await waitUntil(() => aChats.slice(aMark).some((c) => c.from === "TA" && c.room === "private"), 120000, "private reply from the TA brain");
   assert(!sChats.some((c) => c.room === "private"), "student saw none of the private exchange");
 
-  console.log("\n4. Compose → preview → pin to the Library board; student sees it on entry");
-  admin.send("admin", { action: "compose", instruction: "Post: homework 1 is to read the attention paper; due Friday." });
-  await waitUntil(() => previews.length > 0, 120000, "post composed and previewed");
-  assert(!/here's the announcement|saved to/i.test(previews[0].text), "preview is clean announcement text");
-  admin.send("admin", { action: "post", board: "library", text: previews[0].text });
+  console.log("\n4. The instructor's own text, pinned to the Library board");
+  const POST = "Homework 1: read the attention paper; due Friday.";
+  admin.send("admin", { action: "post", board: "library", text: POST });
   await wait(800);
   student.send("goto", spawnOf("library"));
   await waitUntil(
-    () => sBoards.some((b) => b.roomId === "library" && b.items?.length > 0),
+    () => sBoards.some((b) => b.roomId === "library" && b.items?.some((i: any) => i.text === POST)),
     25000,
-    "student entered the Library and received the board"
+    "student entered the Library and saw the post verbatim"
   );
 
-  console.log("\n5. Classroom is closed while its skill is on hold");
-  // Replaces the old mic → class transcript → classroom-mode Q&A test.
-  // Restore that section (see git history) when CLASSROOM_OPEN and
-  // CLASSROOM_ENABLED both go back to true.
-  const classroom = init.rooms.find((r: any) => r.id === "classroom");
-  assert(classroom?.closed === true, "Classroom is marked closed");
-  assert(!classroom?.forcedSkill, "Classroom forces no skill");
-  assert(!init.doors.some((d: any) => d.x === 4 && d.y === 13), "Classroom door is sealed");
+  console.log("\n5. Classroom and Prep Room are sealed");
+  // The Classroom waits on its skill being reworked; the Prep Room existed
+  // only to put the TA in notes-and-slides mode and has no job left.
+  for (const [rid, door] of [["classroom", { x: 4, y: 13 }], ["prep-room", { x: 13, y: 13 }]] as const) {
+    const r = init.rooms.find((x: any) => x.id === rid);
+    assert(r?.closed === true, `${r?.label} is marked closed`);
+    assert(!init.doors.some((d: any) => d.x === door.x && d.y === door.y), `${r?.label} door is sealed`);
+    student.send("goto", spawnOf(rid));
+    await wait(2000);
+    assert(!at(me(), spawnOf(rid)), `student cannot walk into ${r?.label}`);
+  }
+
+  console.log("\n6. Walk into the TA office — the TA answers there and nowhere else");
+  // The old step 6 walked BOTH the student and the TA to the Computer Lab
+  // and waited for them to arrive together; it timed out intermittently
+  // (open-issues A3). Only one of them moves now, so the race is gone.
   let mark = sChats.length;
-  student.send("goto", spawnOf("classroom"));
-  await wait(2500);
-  assert(!at(me(), spawnOf("classroom")), "student cannot walk into the Classroom");
-
-  console.log("\n6. Computer Lab forces the review skill");
-  admin.send("admin", { action: "send", agent: "ta", dest: "computer-lab" });
   student.send("goto", spawnOf("computer-lab"));
-  await waitUntil(() => at(me(), spawnOf("computer-lab")) && at(taEnt(), spawnOf("computer-lab")), 40000, "Jade & TA in the Computer Lab");
+  await waitUntil(() => at(me(), spawnOf("computer-lab")), 30000, "student reached the Computer Lab");
+  student.send("chat", { text: "Anyone here?" });
+  await wait(6000);
+  assert(!sChats.slice(mark).some((c) => c.from === "TA"), "the TA does not answer from another room");
+  student.send("goto", spawnOf("office-ta"));
+  await waitUntil(() => at(me(), spawnOf("office-ta")), 30000, "student walked into the TA office");
   mark = sChats.length;
-  student.send("chat", { text: "Which pull request should I look at first?" });
-  await waitUntil(() => sChats.slice(mark).some((c) => c.from === "TA"), 120000, "TA replied in the lab");
-  assert(
-    sChats.slice(mark).find((c) => c.from === "TA").skill === "review",
-    "room forced the review skill"
-  );
+  student.send("chat", { text: "What should I read first for this course?" });
+  await waitUntil(() => sChats.slice(mark).some((c) => c.from === "TA"), 120000, "TA replied in their office");
 
-  console.log("\n7. Speak as TA in a student office — the virtual student responds");
-  admin.send("admin", { action: "send", agent: "ta", dest: "office-s1" });
-  await waitUntil(() => at(taEnt(), spawnOf("office-s1")), 40000, "TA walked to Sam's office");
+  console.log("\n7. Speak as the TA — heard by the student standing in the office");
   const aMark2 = aChats.length;
-  admin.send("chat", { text: "Hi Sam! How is the attention reading going?", mode: "speak" });
+  const sMark2 = sChats.length;
+  admin.send("chat", { text: "Good to see you — grab a seat.", mode: "speak" });
   await waitUntil(
-    () => aChats.slice(aMark2).some((c) => c.from === "TA" && c.room === "Sam's Office"),
+    () => sChats.slice(sMark2).some((c) => c.from === "TA" && c.room === "TA Office"),
     5000,
-    "admin's words came out of TA in the room"
+    "admin's words came out of the TA, in the office, heard by the student"
   );
-  await waitUntil(() => aChats.slice(aMark2).some((c) => c.from === "Sam"), 120000, "Sam replied to TA");
+  assert(aChats.slice(aMark2).some((c) => c.from === "TA"), "the admin hears it too");
+
+  console.log("\n7b. A virtual student can still be directed in their own office");
+  const aMark3 = aChats.length;
+  admin.send("admin", { action: "send", agent: "sam", dest: "office-ta" });
+  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-ta")), 40000,
+    "Sam walked to the TA office");
+  admin.send("admin", { action: "direct", agent: "sam", instruction: "Say hello to whoever is here." });
+  await waitUntil(() => aChats.slice(aMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke as directed");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();

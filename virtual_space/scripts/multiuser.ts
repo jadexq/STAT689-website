@@ -100,7 +100,7 @@ async function join(client: Client, devUser: string, role?: "admin"): Promise<Jo
   j.room.onMessage("adminAck", (m) => j.acks.push(m));
   j.room.onMessage("board", () => {});
   j.room.onMessage("typing", () => {});
-  j.room.onMessage("postPreview", () => {});
+  j.room.onMessage("notice", () => {});
   await waitUntil(() => !!j.init, 5000, `joined as ${devUser}${role ? ` (requesting ${role})` : ""}`);
   return j;
 }
@@ -137,12 +137,11 @@ async function main() {
   assert(impostor.init!.you !== null, "…and gets an ordinary avatar");
   const spawn = (id: string) => ana.init!.rooms.find((r: any) => r.id === id).spawn;
   const taEnt = () => ana.world.find((e) => e.id === "agent-ta")!;
-  impostor.room.send("admin", { action: "send", agent: "ta", dest: "commons" });
+  impostor.room.send("admin", { action: "direct", agent: "ta", instruction: "Say anything." });
   await waitUntil(() => impostor.acks.length > 0, 3000, "the server answered the admin command");
   assert(impostor.acks[0].ok === false, "…by refusing it");
-  await wait(500);
+  assert(/not on the instructor list/i.test(impostor.acks[0].note), "…for the right reason: not an admin");
   const c = spawn("commons");
-  assert(!(taEnt().x === c.x && taEnt().y === c.y), "TA did not move");
 
   console.log("\n3. The instructor does get it");
   const jade = await join(client, "jade@local", "admin");
@@ -181,25 +180,16 @@ async function main() {
     return !!e && e.x >= ta.x1 && e.x <= ta.x2 && e.y >= ta.y1 && e.y <= ta.y2;
   };
 
-  // The TA's position PERSISTS between suites and nothing returns them home.
-  // Home is office-ta, but smoke and integration walk them elsewhere, and
-  // a suite that dies mid-way leaves them wherever it stopped. Since
-  // scheduleReplies only picks agents whose room matches the speaker's, a
-  // TA standing in someone else's office never answers — no matter how
-  // long you wait or how often you retry. THAT is what made this suite
-  // order-dependent. So put them where this test needs them instead of hoping.
+  // This suite used to have to WALK the TA home first: their position
+  // persisted between suites, so a TA left in someone else's office by an
+  // earlier run never answered here (open-issues A2). The TA cannot move
+  // any more, so there is nothing left to place — the assertion replaces
+  // ninety seconds of retrying.
   const taAtHome = () => {
     const t = ana.world.find((e) => e.id === "agent-ta");
     return !!t && t.x >= ta.x1 && t.x <= ta.x2 && t.y >= ta.y1 && t.y <= ta.y2;
   };
-  const placeBy = Date.now() + 90_000;
-  while (!taAtHome() && Date.now() < placeBy) {
-    // Refused while the TA is busy, hence the retry rather than a single send.
-    jade.room.send("admin", { action: "send", agent: "ta", dest: "office-ta" });
-    const until = Date.now() + 8_000;
-    while (!taAtHome() && Date.now() < until) await wait(300);
-  }
-  assert(taAtHome(), "TA is in the TA office (put there by this suite, not assumed)");
+  assert(taAtHome(), "the TA is in the TA office, as they always are");
 
   ana.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(ana), 30000, "Ana reached the TA office");

@@ -8,6 +8,13 @@ import type { Session, SkillName } from "./session.ts";
 
 export type RouteResult = SkillName | "clarify";
 
+// The TA has exactly one job now: answer course questions grounded in the
+// materials. With one skill there is nothing to route, so route() returns
+// before the classification call — one fewer LLM round trip on EVERY student
+// message, and its latency and tokens with it. Set to null to bring the
+// router back; everything below still works.
+export const SINGLE_SKILL: SkillName | null = "coach";
+
 // TEMPORARY: the classroom skill is disabled while it is being reworked.
 // Flip to true to reopen — every path below keys off this one flag, and the
 // clarify menu / JSON enum / numeric picker all derive from SKILLS.
@@ -40,6 +47,8 @@ const COMMANDS: Record<string, SkillName> = {
 };
 
 export async function route(session: Session, message: string): Promise<RouteResult> {
+  if (SINGLE_SKILL) return SINGLE_SKILL;
+
   const trimmed = message.trim();
 
   // 1 — short-circuits, no LLM

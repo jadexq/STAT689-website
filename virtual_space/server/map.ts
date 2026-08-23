@@ -6,8 +6,11 @@
 //   rows  8-12  commons — the hall
 //   rows 14-19  Classroom | Prep Room | Library | Computer Lab | TA Office
 //
-// The bottom rooms are MODE SELECTORS for the TA's brain (forcedSkill),
-// and Library / Computer Lab have bulletin BOARDS the TA can pin posts to.
+// The bottom rooms USED TO BE mode selectors for the TA's brain: standing
+// the TA in one forced a skill. That mechanism is gone — the TA never
+// leaves the TA office now, so no room but their own could ever select
+// anything. What survives is the bulletin BOARDS in the Library and the
+// Computer Lab, which students read by walking in.
 
 export const TILE = 32;
 
@@ -21,19 +24,22 @@ export interface RoomDef {
   spawn: { x: number; y: number };
   tint: string; // floor color hint for the client
   kind: "office" | "special" | "commons";
-  // When the TA agent stands in this room, chat with them is handled by
-  // this skill in the TA brain (bypasses the intent router).
-  forcedSkill?: string;
-  modeLabel?: string; // shown on the TA's avatar while they are in the room
   hasBoard?: boolean; // room has a bulletin board the TA can pin posts to
   closed?: boolean; // room is sealed off (under construction); no way in
+  // At most one human inside at a time; the door shuts behind them.
+  soloOccupancy?: boolean;
 }
 
-// TEMPORARY: the Classroom is closed while the classroom skill is being
-// reworked. While false the room is sealed (no door, so it is unreachable
-// by BFS or by walking), it forces no skill, and it is labelled 🚧.
-// Flip to true to reopen — nothing else needs to change here.
+// Two rooms are sealed. While the flag is false the room has no door, so it
+// is unreachable both by BFS and on foot, and it is labelled 🚧. Flip to
+// true to reopen — nothing else here needs to change.
+//
+// Classroom: TEMPORARY, waiting on the classroom skill being reworked.
+// Prep Room: it existed only to put the TA in "notes and slides" mode. With
+// the TA fixed in their office and down to a single skill there is nothing
+// left for the room to do, so it is shut rather than left as a puzzle.
 export const CLASSROOM_OPEN = false;
+export const PREP_ROOM_OPEN = false;
 
 const OFFICE_TINT_A = "#2e3a54";
 const OFFICE_TINT_B = "#33405c";
@@ -48,11 +54,12 @@ export const ROOMS: RoomDef[] = [
   { id: "office-jade", label: "Jade's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office" },
   // --- bottom band: special rooms + TA office (rows 14-19) ---
   { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special",
-    ...(CLASSROOM_OPEN ? { forcedSkill: "classroom", modeLabel: "in class" } : { closed: true }) },
-  { id: "prep-room",    label: "Prep Room",    x1: 10, y1: 14, x2: 16, y2: 19, spawn: { x: 13, y: 16 }, tint: "#2a4448", kind: "special", forcedSkill: "author", modeLabel: "prepping notes/slides" },
-  { id: "library",      label: "Library",      x1: 18, y1: 14, x2: 25, y2: 19, spawn: { x: 21, y: 16 }, tint: "#4d3b20", kind: "special", forcedSkill: "announce", modeLabel: "at the library", hasBoard: true },
-  { id: "computer-lab", label: "Computer Lab", x1: 27, y1: 14, x2: 33, y2: 19, spawn: { x: 30, y: 16 }, tint: "#233d52", kind: "special", forcedSkill: "review", modeLabel: "reviewing code", hasBoard: true },
-  { id: "office-ta",    label: "TA Office",    x1: 35, y1: 14, x2: 41, y2: 19, spawn: { x: 38, y: 16 }, tint: "#3a3158", kind: "special" },
+    ...(CLASSROOM_OPEN ? {} : { closed: true }) },
+  { id: "prep-room",    label: PREP_ROOM_OPEN ? "Prep Room" : "Prep Room 🚧", x1: 10, y1: 14, x2: 16, y2: 19, spawn: { x: 13, y: 16 }, tint: "#2a4448", kind: "special",
+    ...(PREP_ROOM_OPEN ? {} : { closed: true }) },
+  { id: "library",      label: "Library",      x1: 18, y1: 14, x2: 25, y2: 19, spawn: { x: 21, y: 16 }, tint: "#4d3b20", kind: "special", hasBoard: true },
+  { id: "computer-lab", label: "Computer Lab", x1: 27, y1: 14, x2: 33, y2: 19, spawn: { x: 30, y: 16 }, tint: "#233d52", kind: "special", hasBoard: true },
+  { id: "office-ta",    label: "TA Office",    x1: 35, y1: 14, x2: 41, y2: 19, spawn: { x: 38, y: 16 }, tint: "#3a3158", kind: "special", soloOccupancy: true },
   // --- commons: catch-all for all remaining floor; rect = the hall (label/spawn) ---
   { id: "commons", label: "Common Area", x1: 1, y1: 8, x2: 41, y2: 12, spawn: { x: 21, y: 10 }, tint: "#2b3247", kind: "commons" },
 ];
@@ -67,9 +74,10 @@ const COMMONS_RECTS = [
 export const DOORS: { x: number; y: number }[] = [
   // offices → the hall
   { x: 3, y: 7 }, { x: 10, y: 7 }, { x: 17, y: 7 }, { x: 24, y: 7 }, { x: 31, y: 7 }, { x: 38, y: 7 },
-  // the hall → bottom rooms (the Classroom door only exists while it is open)
+  // the hall → bottom rooms (a sealed room's door does not exist)
   ...(CLASSROOM_OPEN ? [{ x: 4, y: 13 }] : []),
-  { x: 13, y: 13 }, { x: 21, y: 13 }, { x: 30, y: 13 }, { x: 38, y: 13 },
+  ...(PREP_ROOM_OPEN ? [{ x: 13, y: 13 }] : []),
+  { x: 21, y: 13 }, { x: 30, y: 13 }, { x: 38, y: 13 },
 ];
 
 export const COLS = 43;
@@ -104,19 +112,24 @@ export function roomById(id: string): RoomDef | undefined {
   return ROOMS.find((r) => r.id === id);
 }
 
-// The skill forced by whatever room the given tile is in (if any).
-export function forcedSkillAt(x: number, y: number): string | undefined {
-  const rid = roomAt(x, y);
-  return rid ? roomById(rid)?.forcedSkill : undefined;
+// The door tile of a solo-occupancy room, so callers can block it while the
+// room is taken. One door per room by construction — every bottom room is
+// entered from the hall directly above it.
+export function doorOf(roomId: string): { x: number; y: number } | undefined {
+  const r = roomById(roomId);
+  if (!r) return undefined;
+  return DOORS.find((d) => d.x >= r.x1 && d.x <= r.x2 && Math.abs(d.y - r.y1) === 1);
 }
 
 // Breadth-first search over the tile grid. Returns the path as a list of
 // tiles to step through (excluding the start tile), or null if unreachable.
 export function findPath(
   from: { x: number; y: number },
-  to: { x: number; y: number }
+  to: { x: number; y: number },
+  blocked?: Set<string> // "x,y" tiles to route around (e.g. a shut door)
 ): { x: number; y: number }[] | null {
-  if (!walkable(to.x, to.y)) return null;
+  const open = (x: number, y: number) => walkable(x, y) && !blocked?.has(`${x},${y}`);
+  if (!open(to.x, to.y)) return null;
   if (from.x === to.x && from.y === to.y) return [];
   const key = (x: number, y: number) => y * COLS + x;
   const prev = new Map<number, number>();
@@ -133,7 +146,7 @@ export function findPath(
     for (const d of dirs) {
       const nx = cur.x + d.x;
       const ny = cur.y + d.y;
-      if (!walkable(nx, ny) || visited.has(key(nx, ny))) continue;
+      if (!open(nx, ny) || visited.has(key(nx, ny))) continue;
       visited.add(key(nx, ny));
       prev.set(key(nx, ny), key(cur.x, cur.y));
       if (nx === to.x && ny === to.y) {

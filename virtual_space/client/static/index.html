@@ -108,9 +108,9 @@
   #admin-status.err { color: #ff7a7a; }
   hr.sep { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
 
-  #preview { display: none; margin-top: 10px; border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
-  #preview .admin-title { color: var(--warn); margin-bottom: 6px; }
-  #preview-text { width: 100%; min-height: 90px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
+  #post-box { border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
+  #post-box .admin-title { color: var(--warn); margin-bottom: 6px; }
+  #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
   #mic-toggle.on { background: #4d2020; border-color: #a04545; }
 </style>
 </head>
@@ -118,7 +118,7 @@
 <div id="app">
   <div id="game-col">
     <div id="game"></div>
-    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. Bottom rooms set the TA's mode: <b>Prep Room</b> (notes &amp; slides), <b>Library</b> (news, materials &amp; homework — 📌 board), <b>Computer Lab</b> (code review — 📌 board). The <b>Classroom</b> 🚧 is closed while it is being rebuilt.</div>
+    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. <b>To talk to the TA, walk into the TA Office</b> — one student at a time, so the door shuts while someone is in there. The <b>Library</b> and <b>Computer Lab</b> have 📌 boards to read. The <b>Classroom</b> and <b>Prep Room</b> 🚧 are closed.</div>
   </div>
 
   <div id="side">
@@ -155,21 +155,15 @@
       <textarea id="instruction" placeholder='e.g. "Post homework 1: read the attention paper, due Friday." or a link to share'></textarea>
       <div class="row btns">
         <button id="direct-send">🗣 Say in agent's room</button>
-        <button id="compose-post" class="primary">📌 Compose board post (TA)</button>
       </div>
-      <div class="row btns">
-        <button id="quick-paper">📌 TA: post an AI paper to the Library</button>
-      </div>
-      <div id="preview">
-        <div class="admin-title">📌 Post preview — not pinned yet (editable)</div>
-        <textarea id="preview-text"></textarea>
+      <hr class="sep">
+      <div id="post-box">
+        <div class="admin-title">📌 Pin to a board</div>
+        <textarea id="post-text" placeholder="Your own words — pinned exactly as written. e.g. a paper link and why it matters, or homework 1 due Friday."></textarea>
         <div class="row">
           <label for="board-sel">Board</label>
           <select id="board-sel"></select>
-        </div>
-        <div class="row btns">
-          <button id="preview-send" class="primary">Pin to board</button>
-          <button id="preview-discard">Discard</button>
+          <button id="post-send" class="primary">Pin</button>
         </div>
       </div>
       <hr class="sep">

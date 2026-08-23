@@ -20,13 +20,10 @@ export interface TaWho {
   name: string;
 }
 
-// One chat turn with the brain. `skill` (optional) bypasses the TA's
-// intent router — used for the room-based modes (classroom/prep/broadcast).
-export async function taChat(
-  who: TaWho,
-  message: string,
-  skill?: string,
-): Promise<TaChatResult> {
+// One chat turn with the brain. No skill parameter: the TA brain has exactly one skill now, so there is
+// nothing for a caller to force. The wire still accepts one — see
+// virtual_ta/server/router.ts SINGLE_SKILL — but nothing here sends it.
+export async function taChat(who: TaWho, message: string): Promise<TaChatResult> {
   const res = await fetch(`${TA_BASE}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -34,7 +31,6 @@ export async function taChat(
       sessionId: who.sessionId,
       message,
       who: { email: who.email, name: who.name },
-      ...(skill ? { skill } : {}),
     }),
     signal: AbortSignal.timeout(180_000),
   });
