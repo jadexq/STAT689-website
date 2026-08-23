@@ -33,6 +33,87 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ---
 
+## 2026-08-22 · Make the test suites order-independent (A1, A2)
+
+**Status:** planned — awaiting review
+**Tracker:** resolves `open-issues.md` A1 and A2. Status gets ticked there, not here.
+
+### Why now, before the next batch of changes
+
+While `multiuser` and `ghost-test` are red, every change is verified against "fails the same way
+as before". That is a weak signal and it decays: a genuine regression in either suite reads as
+the known failure and gets waved through. It has already cost real time once — the Phase C auth
+change had to be stashed and re-run at baseline `09f5e81` purely to prove it had not broken
+them. With several changes queued, that tax repeats per change. It is cheapest to fix now, with
+nothing else in flight to confuse the result.
+
+Neither is a product bug. Both are test-quality problems.
+
+### A1 — `ghost-test.ts` asserts an absolute entity count
+
+**Cause.** `scripts/ghost-test.ts` ends with `if (world.entities.length !== 12)`. That total has
+been observed as 7, 9, 10 and 12. Humans accumulate in a long-running server because
+`allowReconnection` holds a seat for `RECONNECT_WINDOW_S = 120`, so a re-run inside that window
+legitimately starts with extra avatars. **Hardcoding any total is the wrong shape for this
+assertion** — the number is not a property of the thing being tested.
+
+**Fix.** Assert what the suite is actually about, and nothing else:
+
+- exactly one avatar for the joining identity — *already present* (`Ana avatars: 1`), and this
+  is the real ghost assertion
+- `entities.filter(kind === "agent").length === 6` — the stable invariant, already used at
+  `scripts/multiuser.ts:100` (5 virtual students + Terra)
+- no two humans share a display name — closer to what "ghost" means than any count is
+
+Remove the absolute total. Leftover humans from a recent run then cannot fail the suite, which
+is correct: they are not ghosts, they are seats inside their reconnection window.
+
+### A2 — `multiuser.ts` fails when it is not run first
+
+**Cause, and it is not what the tracker assumed.** The tracker records this as a wait expiring.
+It is not a slow reply, and the timeout is *already* 180 s. The real mechanism:
+
+- `MainRoom.scheduleReplies` (line 287) builds its reply set from
+  `agents.filter(a => ... && !a.busy)` — a busy agent is filtered out entirely
+- `agentRespond` (line 297) returns early if `agent.busy`
+- so a message sent to Terra while she is mid-LLM-call is **silently dropped**. This is stated
+  as deliberate in the comment at `scripts/multiuser.ts:147`.
+
+When `smoke` and `integration` have run first, Terra is still finishing their work, Ana's
+message is dropped, and **no amount of waiting can succeed** — there is nothing in flight to
+wait for. Raising the timeout cannot fix this, which is worth stating because it is the obvious
+first thing to try.
+
+**Fix.** Make the caller retry, which is what the product contract actually requires: send, wait
+~25 s for a reply, re-send if none arrived, within the existing overall budget. Fail with a
+message that distinguishes "Terra never answered across N attempts" from "Terra answered late".
+
+**Deliberately not doing two things.** Not raising the timeout — it cannot work. Not changing
+the server so that a busy agent queues or acknowledges — that is a product change, and making
+one inside a test fix is how you lose track of what broke what.
+
+### Found while diagnosing A2 — record, do not fix here
+
+A student who messages Terra while she is busy with someone else gets **complete silence**: no
+reply, no "one moment", no typing indicator. The admin path has a courtesy line for this
+(`MainRoom.ts:339-341`, "(one moment — mid-conversation)") and the student path has nothing.
+With five students sharing one Terra this will happen in class. To be filed as a new
+`open-issues.md` entry under section E, and fixed separately.
+
+### Verification — the definition of done A1 and A2 already state
+
+- `smoke → integration → multiuser → ghost-test` green end to end in **one** run
+- `ghost-test` green twice in a row: once against a freshly started server, once as the fourth
+  suite in the sequence
+
+### Scope
+
+`virtual_space/scripts/` only. No server or client changes, no deploy.
+
+### Rollback
+
+Revert the commit; the suites return to their current red baseline.
+
 ## 2026-08-22 · The instructor is always the TA, never a student
 
 **Status:** **shipped 2026-08-22** — `dc57bf8`, verified locally, not yet deployed
