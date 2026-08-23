@@ -169,7 +169,8 @@ export interface Record_ {
   content_sha: string;
   generation: Generation;
   learning_objective: string;
-  grade: number;
+  /** null means "commented but not graded" — see saveRecord(). */
+  grade: number | null;
   tags: string[];
   comment: string;
   ts: string;
@@ -265,7 +266,7 @@ export function rotationVersion(studentIdx: number, sectionIdx: number, versions
 }
 
 export type Assignment =
-  | { kind: "student"; hash: string; assigned: Record<string, string> }
+  | { kind: "student"; hash: string; assigned: Record<string, string>; records: Record<string, Record_> }
   | { kind: "preview"; version: string }
   | { kind: "off-roster" };
 
@@ -320,5 +321,107 @@ export async function resolveAssignment(
     }
     return changed ? f : null;
   });
-  return { kind: "student", hash, assigned: file!.assigned };
+  return { kind: "student", hash, assigned: file!.assigned, records: file!.records };
+}
+
+// ---------------------------------------------------------------------------
+// Recording a judgement
+// ---------------------------------------------------------------------------
+
+// Shown only at a grade of 3 or below: a tag list next to a good grade invites
+// tagging for its own sake, and "what went wrong" is the question worth asking.
+export const TAGS = [
+  "too_abstract",
+  "too_difficult",
+  "too_simple",
+  "too_long",
+  "missing_examples",
+  "poor_organization",
+  "unclear_notation",
+] as const;
+
+const MAX_COMMENT = 4000;
+
+export interface FeedbackInput {
+  section_id: unknown;
+  grade: unknown;
+  tags: unknown;
+  comment: unknown;
+}
+
+/**
+ * Write one student's judgement of one section.
+ *
+ * The version, the content hash, the provenance and the objective are all
+ * taken from the SERVER's copy — the caller supplies a section, a grade, tags
+ * and prose, and nothing else. A record that trusted the client for the
+ * version id would be a record anyone could mislabel.
+ *
+ * A null grade is allowed and is not an oversight. A student who types a
+ * comment and navigates away before clicking a number has still said the most
+ * useful thing on the page; losing it to preserve a non-null column would be
+ * the wrong trade. Such records export, and are skipped when deriving pairs.
+ */
+export async function saveRecord(
+  bundle: Bundle,
+  email: string,
+  input: FeedbackInput
+): Promise<{ ok: true; record: Record_ } | { ok: false; note: string }> {
+  const idx = studentIndex(email);
+  if (idx === undefined) return { ok: false, note: "You are not on the class roster for this handout." };
+
+  const sectionId = String(input.section_id ?? "");
+  const sectionIndex = bundle.sections.findIndex((s) => s.section_id === sectionId);
+  if (sectionIndex < 0) return { ok: false, note: "No such section in this handout." };
+  const section = bundle.sections[sectionIndex];
+
+  const rawGrade = input.grade;
+  let grade: number | null = null;
+  if (rawGrade !== null && rawGrade !== undefined && rawGrade !== "") {
+    const n = Number(rawGrade);
+    if (!Number.isInteger(n) || n < 1 || n > 5) return { ok: false, note: "A grade is a whole number from 1 to 5." };
+    grade = n;
+  }
+
+  const allowed = new Set<string>(TAGS);
+  const tags = Array.isArray(input.tags)
+    ? [...new Set(input.tags.map(String).filter((t) => allowed.has(t)))]
+    : [];
+  const comment = String(input.comment ?? "").slice(0, MAX_COMMENT).trim();
+
+  const hash = studentHash(email);
+  let record!: Record_;
+  await updateStudentFile(bundle.handout_id, hash, (f) => {
+    // The assignment must already exist — it is written when the page renders.
+    // Falling back to the rotation here would let a POST that never opened the
+    // page invent an assignment, which is how a record ends up describing text
+    // the student never saw.
+    const versionId = f.assigned[sectionId];
+    if (!versionId) return null;
+    const body = section.bodies[versionId];
+    if (!body) return null;
+    record = {
+      schema_version: 1,
+      term: bundle.term,
+      handout_id: bundle.handout_id,
+      section_id: sectionId,
+      section_index: sectionIndex,
+      student_hash: hash,
+      version_id: versionId,
+      content_sha: body.content_sha,
+      // Copied, not referenced: an exported line has to survive the instructor
+      // editing the source, and the objective is the prompt half of every
+      // preference pair derived from these grades.
+      generation: body.generation,
+      learning_objective: section.learning_objective,
+      grade,
+      tags: grade !== null && grade <= 3 ? tags : [],
+      comment,
+      ts: new Date().toISOString(),
+    };
+    f.records[sectionId] = record;
+    return f;
+  });
+  if (!record) return { ok: false, note: "Open the handout before grading it." };
+  return { ok: true, record };
 }

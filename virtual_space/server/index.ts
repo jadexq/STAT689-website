@@ -23,12 +23,13 @@ import {
   safeId,
   saltState,
   saveBundle,
+  saveRecord,
   studentHash,
   studentIndex,
   validateBundle,
   type Bundle,
 } from "./handouts";
-import { renderHandoutPage } from "./handout-render";
+import { judgeScript, renderHandoutPage, renderJudgeWidget } from "./handout-render";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -316,11 +317,74 @@ app.get("/handout/:id", async (req, res) => {
         bundle,
         assigned: a.kind === "student" ? a.assigned : {},
         preview: a.kind === "preview" ? a.version : undefined,
+        // The admin sees the prose exactly as a student would and no widget:
+        // a preview that could be graded would put the instructor's own
+        // opinion into a dataset of student opinion.
+        afterSection:
+          a.kind === "student" ? (s) => renderJudgeWidget(s.section_id, a.records[s.section_id]) : undefined,
+        scripts: a.kind === "student" ? judgeScript(bundle.handout_id) : undefined,
       })
     );
   } catch (err) {
     console.error(`[space] handout page: ${(err as Error).message}`);
     page(500, "# That handout could not be opened\n\nTry again in a moment.");
+  }
+});
+
+// A student's judgement of one section. The identity comes from identify() and
+// NEVER from the body — this is a write open to students, which is exactly why
+// the record is keyed by the caller rather than by what the caller claims.
+app.post("/api/handouts/:id/feedback", async (req, res) => {
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  try {
+    const salt = saltState();
+    if (!salt.ok) {
+      res.status(503).json({ ok: false, note: salt.note });
+      return;
+    }
+    if (who.isAdmin) {
+      // The preview records nothing, and this is the second place that has to
+      // be true: a curl from the admin must not be able to do what the page
+      // deliberately does not offer them.
+      res.status(403).json({ ok: false, note: "The instructor's preview is not recorded." });
+      return;
+    }
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      res.status(404).json({ ok: false, note: "No such handout." });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await saveRecord(bundle, who.email, {
+      section_id: body.section_id,
+      grade: body.grade,
+      tags: body.tags,
+      comment: body.comment,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    logEvent("handout_feedback", {
+      email: who.email,
+      id: bundle.handout_id,
+      section: result.record.section_id,
+      version: result.record.version_id,
+      grade: result.record.grade,
+      tags: result.record.tags.length,
+      comment_chars: result.record.comment.length,
+    });
+    res.json({ ok: true, saved: result.record.ts });
+  } catch (err) {
+    console.error(`[space] handout feedback: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, note: "Could not save that." });
   }
 });
 
