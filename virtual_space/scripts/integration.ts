@@ -165,13 +165,31 @@ async function main() {
   );
   assert(aChats.slice(aMark2).some((c) => c.from === "TA"), "the admin hears it too");
 
-  console.log("\n7b. A virtual student can still be directed in their own office");
-  const aMark3 = aChats.length;
+  console.log("\n7b. The TA office is 1:1 — virtual students are not admitted");
+  // An earlier version of this suite walked Sam in here to prove `direct`
+  // still worked, and left him standing in the office. He then joined every
+  // real conversation, because scheduleReplies picks up any agent in the
+  // room. Two fixes: the server refuses the destination, and this suite
+  // does its dispatching somewhere it is willing to clean up.
+  const ackMark1 = acks.length;
   admin.send("admin", { action: "send", agent: "sam", dest: "office-ta" });
-  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-ta")), 40000,
-    "Sam walked to the TA office");
+  await waitUntil(() => acks.slice(ackMark1).some((a) => !a.ok), 5000, "Sam was refused entry to the TA office");
+  assert(!at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-ta")), "…and did not go");
+
+  console.log("\n7c. A virtual student can still be dispatched and directed elsewhere");
+  student.send("goto", spawnOf("commons"));
+  await waitUntil(() => at(me(), spawnOf("commons")), 30000, "student left the TA office for the Common Area");
+  const sMark3 = sChats.length;
+  admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
+  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("commons")), 40000,
+    "Sam walked to the Common Area");
   admin.send("admin", { action: "direct", agent: "sam", instruction: "Say hello to whoever is here." });
-  await waitUntil(() => aChats.slice(aMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke as directed");
+  await waitUntil(() => sChats.slice(sMark3).some((c) => c.from === "Sam"), 120000, "Sam spoke as directed");
+  // Put him back. An agent left standing where a suite dropped him is the
+  // A2 failure mode all over again, and this time a user hit it.
+  admin.send("admin", { action: "send", agent: "sam", dest: "office-s1" });
+  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), 40000,
+    "Sam was sent home before the suite exits");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();

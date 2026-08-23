@@ -216,6 +216,25 @@ persist. The placement block added in `7eedc2a` becomes dead weight the day this
 2. **Timeout** — in scope; 4-minute warning, 5-minute return, as proposed.
 3. **Empty rooms** — seal the Prep Room; leave the Computer Lab open.
 
+### Addendum, same day — the TA office is 1:1 including agents
+
+The instructor tested as a student and a virtual student joined the conversation. Cause and fix
+in `open-issues.md` E5; the design point belongs here.
+
+**Solo occupancy counts humans only, deliberately** — the TA lives in the room and must not block
+themself. That exemption silently covered the other five agents too. "One student at a time" was
+therefore only true of *humans*, which is not what the words mean to anyone reading them.
+
+So the room is now 1:1 in the sense a person would expect: one student, the TA, nobody else.
+Enforced twice on purpose — agents are refused the destination, *and* excluded from replying
+there — because a rule with one gate gets walked around the first time some other path places an
+agent in the room.
+
+The general lesson is about the fix, not the bug: making the TA immovable did not retire the
+persistent-position problem, it narrowed it to the five agents that can still move. A narrowed
+problem still fires, and this one fired within a day, from the test written to verify the change
+that narrowed it.
+
 ### Verification — done 2026-08-22
 
 All four suites green, twice, plus two new ones:

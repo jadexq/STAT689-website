@@ -128,6 +128,12 @@ async function main() {
   admin.send("admin", { action: "send", agent: "sam", dest: "commons" });
   await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("commons")), 30000,
     "a virtual student can still be sent anywhere");
+  // And put back. Agents persist between runs, so a suite that leaves one
+  // standing somewhere makes it a fixture of everyone else's world — which
+  // is how a virtual student ended up joining real TA conversations.
+  admin.send("admin", { action: "send", agent: "sam", dest: "office-s1" });
+  await waitUntil(() => at(world.entities.find((e) => e.id === "agent-sam"), spawnOf("office-s1")), 30000,
+    "…and is sent home before the suite exits");
 
   console.log("\n5. Walk into the TA office — the TA answers from the TA brain");
   student.send("goto", spawnOf("office-ta"));

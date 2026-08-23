@@ -437,6 +437,26 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   students asking at once both end up answered or both told to wait.~~ Met: the second student is
   told, at the door, that someone is with the TA and who. Verified by `multiuser` steps 6-7.
 
+### E5. A virtual student stood in the TA office and joined every conversation
+- [x] **Resolved 2026-08-22 in `f2f36d3` — reported by the instructor while testing as a student.**
+- **What happened.** Sam was standing at (38,16), inside the TA office, so `scheduleReplies` —
+  which picks up to two virtual students present in the speaker's room — had him answer alongside
+  the TA. The 1:1 conversation was not 1:1.
+- **How he got there.** The `integration` suite walked him in to prove the admin's `direct` action
+  still worked, and never walked him out. Agent positions persist for the life of the server, so
+  a suite that leaves one somewhere makes it a fixture of everyone else's world. **This is A2's
+  failure mode exactly** — the one that was supposedly retired by making the TA immovable. It was
+  not retired; it was narrowed to the five agents that can still move, and then re-created by the
+  very commit that narrowed it.
+- **Two fixes, because one would not have been enough.** The server now refuses any
+  solo-occupancy room as a destination for an agent, and excludes non-TA agents from replying in
+  one — so even an agent placed there by some future path stays quiet. Separately, `smoke` and
+  `integration` send agents home before exiting.
+- **The canary already existed.** `smoke` step 3 asserts no agent answers from another room; with
+  Sam loose in the commons it failed immediately. It had simply never been run after a suite that
+  moved an agent and stopped.
+- **Resolved when:** ~~a full four-suite run leaves every agent in their own office.~~ Met, checked.
+
 ### E3. Bullet lists and headings still arrive as raw markdown in the space chat
 - [ ] **Open — cosmetic, low cost to live with, cheap to finish.**
 - The chat bubble renders bold, inline code and links (`ea9bb22`), which covers most of what the

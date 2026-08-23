@@ -24,6 +24,11 @@
 // features that depend on it (walk-in access, one student at a time) both
 // collapse without it. See plan/app-changes.md, 2026-08-22.
 //
+// The TA office is a 1:1 room: one student, the TA, nobody else. The
+// solo-occupancy count deliberately ignores agents (the TA lives there and
+// must not block themself), so keeping the virtual students out is a
+// separate rule — enforced on the way in, and again on who may reply.
+//
 // ONE STUDENT AT A TIME. The TA office admits a single human; the door
 // shuts behind them and the next student has to wait. The TA already served
 // one caller at a time (AgentRuntime.busy) — the queue existed, it was just
@@ -439,7 +444,9 @@ export class MainRoom extends Room {
   // MAX_STUDENT_REPLIES virtual students — a room full of students must
   // not turn one "hello" into one LLM call per head.
   private scheduleReplies(rid: string, sender: Sender) {
-    const present = this.agents.filter((a) => roomAt(a.x, a.y) === rid && !a.busy);
+    const present = this.agents.filter(
+      (a) => roomAt(a.x, a.y) === rid && !a.busy && (a.id === TA_ID || !roomById(rid)?.soloOccupancy)
+    );
     const ta = present.find((a) => a.id === TA_ID);
     const students = present.filter((a) => a.id !== TA_ID).slice(0, MAX_STUDENT_REPLIES);
     const queue = ta ? [ta, ...students] : students;
@@ -526,9 +533,11 @@ export class MainRoom extends Room {
     this.pushHistory(rid, { name: ta.name, text });
     this.deliverToRoom(rid, { from: ta.name, id: ta.id, kind: "agent", text });
     logEvent("chat", { who: ta.name, room: rid, text, agent: true, spokenByAdmin: true });
-    const students = this.agents
-      .filter((a) => a.id !== TA_ID && roomAt(a.x, a.y) === rid && !a.busy)
-      .slice(0, MAX_STUDENT_REPLIES);
+    const students = roomById(rid)?.soloOccupancy
+      ? [] // a 1:1 room stays 1:1 even when the instructor is the one talking
+      : this.agents
+          .filter((a) => a.id !== TA_ID && roomAt(a.x, a.y) === rid && !a.busy)
+          .slice(0, MAX_STUDENT_REPLIES);
     students.forEach((agent, i) => {
       this.clock.setTimeout(() => void this.agentRespond(agent, rid, { name: ta.name, text }), 400 + i * 1900);
     });
@@ -603,6 +612,9 @@ export class MainRoom extends Room {
       }
       if (agent.id === TA_ID) {
         return client.send("adminAck", { ok: false, note: "The TA stays in the TA office. Send a virtual student instead." });
+      }
+      if (dest.soloOccupancy) {
+        return client.send("adminAck", { ok: false, note: `The ${dest.label} is for one student and the TA — ${agent.name} can't go in.` });
       }
       const path = findPath({ x: agent.x, y: agent.y }, dest.spawn);
       if (!path) {
