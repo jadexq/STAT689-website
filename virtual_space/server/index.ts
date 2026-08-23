@@ -9,10 +9,10 @@ import compression from "compression";
 import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MainRoom } from "./rooms/MainRoom";
-import { logFilePath } from "./logger";
-import { identityMode, warmIapKeys } from "./identity";
+import { logEvent, logFilePath } from "./logger";
+import { identify, identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
-import { taAgenda, taMaterialFile, taMaterials } from "./ta";
+import { taAgenda, taMaterialFile, taMaterials, taUpload } from "./ta";
 import { renderMarkdownPage } from "./render";
 
 const PORT = Number(process.env.PORT || 2567);
@@ -70,6 +70,37 @@ app.get("/api/materials/:id/file", async (req, res) => {
   } catch (err) {
     console.error(`[space] material file: ${(err as Error).message}`);
     res.status(502).type("text/plain").send("That reading is unavailable right now.");
+  }
+});
+
+// Uploading a reading is the one write on this side of the proxy, so it is
+// the one place the HTTP surface needs an identity check. Behind IAP that is
+// a signed assertion; locally it is the dev user. Without this any student
+// could put a document into the corpus and have the TA cite it as course
+// material — the TA treats every reading as authoritative, which is the whole
+// point of the corpus and exactly why writing to it is the instructor's alone.
+app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (req, res) => {
+  let who;
+  try {
+    who = await identify(req);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("upload_denied", { email: who.email });
+    res.status(403).json({ ok: false, note: "Only the instructor can add course material." });
+    return;
+  }
+  try {
+    const q = req.query as Record<string, string>;
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const result = await taUpload(q, bytes);
+    logEvent("material_upload", { by: who.email, id: q.id, bytes: bytes.length, ok: result.ok });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`[space] upload: ${(err as Error).message}`);
+    res.status(502).json({ ok: false, note: "The corpus is unavailable right now." });
   }
 });
 

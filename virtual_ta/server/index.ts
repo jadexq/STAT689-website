@@ -8,7 +8,7 @@ import express from "express";
 import compression from "compression";
 import path from "node:path";
 import { llmInfo } from "./llm.ts";
-import { formatOf, listReadings, readingFile } from "./materials.ts";
+import { formatOf, listReadings, readingFile, saveUpload } from "./materials.ts";
 import { loadAgenda } from "./agenda.ts";
 import { OUTPUT_DIR } from "./paths.ts";
 import { appendClassTranscriptLine, initStorage, logTurn } from "./logger.ts";
@@ -79,6 +79,24 @@ app.get("/api/materials/:id/file", async (req, res) => {
   }
   res.setHeader("content-type", MIME[found.format] ?? "application/octet-stream");
   res.send(found.bytes);
+});
+
+// Upload a reading. Metadata rides in the query string and the body is the
+// raw file, so no multipart parser and no base64 round-trip. Authorisation is
+// the virtual space's job — this port binds to 127.0.0.1 and the space checks
+// that the uploader is the instructor before forwarding.
+app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (req, res) => {
+  const q = req.query as Record<string, string | undefined>;
+  const result = await saveUpload({
+    id: String(q.id ?? ""),
+    title: String(q.title ?? ""),
+    filename: String(q.filename ?? ""),
+    link: q.link ? String(q.link) : undefined,
+    agenda: q.agenda === "1",
+    pinned: q.pinned === "1",
+    bytes: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+  });
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 // The schedule, parsed. Same proxy path as the readings: the space serves it

@@ -112,3 +112,19 @@ export async function taAgenda(): Promise<{ rows: TaAgendaRow[]; problems: strin
   if (!res.ok) throw new Error(`TA agenda HTTP ${res.status}`);
   return (await res.json()) as { rows: TaAgendaRow[]; problems: string[] };
 }
+
+// Forward one uploaded reading to the corpus. The caller MUST have checked
+// that the uploader is the instructor — see server/index.ts.
+export async function taUpload(
+  params: Record<string, string>,
+  bytes: Buffer
+): Promise<{ ok: boolean; note: string; id?: string }> {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${TA_BASE}/api/materials?${qs}`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: new Uint8Array(bytes),
+    signal: AbortSignal.timeout(60_000),
+  });
+  return (await res.json()) as { ok: boolean; note: string; id?: string };
+}

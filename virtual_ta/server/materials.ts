@@ -16,15 +16,19 @@
 // would blow out prompt cost and latency long before retrieval quality
 // became the binding constraint.
 
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { extractText } from "unpdf";
+import { DATA_DIR } from "./paths.ts";
 
 export interface Reading {
   id: string;
   title: string;
   file: string;
   link?: string;
+  // Which root this reading's manifest was found in. Filled by listReadings,
+  // never read from the manifest itself.
+  root?: string;
   // Always in the prompt, never in the chunk index. For the document where
   // retrieval MISSING it produces a confidently wrong answer rather than a
   // vague one — a deadline, above all. Without the index half of that rule
@@ -47,28 +51,69 @@ export function isPinned(r: Reading): boolean {
   return Boolean(r.pinned || r.agenda);
 }
 
-// Where the corpus lives. Defaults to the repo's own materials/ folder;
-// MATERIALS_DIR points it somewhere else, which is how the real course
-// documents are tested locally without committing them — they are large and
-// some carry vendor names, and this repo is private only for now. The
-// deployed corpus question is settled separately (plan, step 2e).
-const MATERIALS_DIR = process.env.MATERIALS_DIR?.trim()
+// Where the corpus lives — TWO roots, each with its own manifest.json.
+//
+//   UPLOAD_DIR  DATA_DIR/materials. Written by the instructor at run time and
+//               restored from the bucket at boot, so adding a reading is a
+//               drag and drop rather than a git commit and a deploy. It is
+//               also where the real course documents belong: materials/ is
+//               tracked, this repo is private only for now, and git history
+//               outlives that decision.
+//   SHIPPED_DIR the repo's own materials/, or MATERIALS_DIR if set — which
+//               REPLACES the shipped fixture rather than adding to it, and is
+//               how the real corpus is pointed at locally.
+//
+// Uploads are searched first, so re-uploading an id corrects a shipped
+// reading without a deploy. A manifest entry can only name a file inside its
+// own root.
+const SHIPPED_DIR = process.env.MATERIALS_DIR?.trim()
   ? path.resolve(process.env.MATERIALS_DIR.trim())
   : path.join(import.meta.dirname, "..", "materials");
+const UPLOAD_DIR = path.join(DATA_DIR, "materials");
+const ROOTS = [UPLOAD_DIR, SHIPPED_DIR];
 const MAX_READING_CHARS = 28_000;
 
+async function manifestAt(root: string): Promise<Reading[]> {
+  const raw = await readFile(path.join(root, "manifest.json"), "utf8").catch(() => null);
+  if (raw === null) return []; // a root with no manifest yet is normal
+  try {
+    return (JSON.parse(raw).readings ?? []) as Reading[];
+  } catch (err) {
+    // One unparseable manifest must not empty the whole corpus.
+    console.error(`[virtual-ta] ${path.join(root, "manifest.json")}: ${(err as Error).message}`);
+    return [];
+  }
+}
+
 export async function listReadings(): Promise<Reading[]> {
-  const raw = await readFile(path.join(MATERIALS_DIR, "manifest.json"), "utf8");
-  const manifest = JSON.parse(raw);
-  return (manifest.readings ?? []) as Reading[];
+  const out: Reading[] = [];
+  const seen = new Set<string>();
+  for (const root of ROOTS) {
+    for (const r of await manifestAt(root)) {
+      if (!r?.id || !r?.file || seen.has(r.id)) continue;
+      seen.add(r.id);
+      // Assigned here, never taken from the manifest: a reading's root is
+      // where its manifest was found, and a manifest does not get to say
+      // otherwise.
+      out.push({ ...r, root });
+    }
+  }
+  return out;
+}
+
+// The reading's file on disk, or null if the manifest is trying to reach out
+// of its own root with "../".
+function filePathOf(reading: Reading): string | null {
+  const root = reading.root ?? SHIPPED_DIR;
+  const filePath = path.join(root, reading.file);
+  return path.relative(root, filePath).startsWith("..") ? null : filePath;
 }
 
 // Full text of one reading, PDFs extracted and HTML stripped. Uncapped —
 // callers decide how much of it they can afford.
 async function rawText(reading: Reading): Promise<string | null> {
-  const filePath = path.join(MATERIALS_DIR, reading.file);
-  // Keep a manifest entry from reaching outside materials/ with "../".
-  if (path.relative(MATERIALS_DIR, filePath).startsWith("..")) return null;
+  const filePath = filePathOf(reading);
+  if (!filePath) return null;
 
   let text: string;
   const ext = path.extname(reading.file).toLowerCase();
@@ -107,9 +152,8 @@ export async function readingFile(
 ): Promise<{ reading: Reading; bytes: Buffer; format: string } | null> {
   const reading = (await listReadings()).find((r) => r.id === id);
   if (!reading) return null;
-  const filePath = path.join(MATERIALS_DIR, reading.file);
-  // Same guard as rawText: a manifest entry must not reach outside the corpus.
-  if (path.relative(MATERIALS_DIR, filePath).startsWith("..")) return null;
+  const filePath = filePathOf(reading);
+  if (!filePath) return null;
   const bytes = await readFile(filePath).catch(() => null);
   if (!bytes) return null;
   return { reading, bytes, format: formatOf(reading) };
@@ -226,7 +270,8 @@ let index: { key: string; chunks: Indexed[]; df: Map<string, number> } | null = 
 async function indexKey(readings: Reading[]): Promise<string> {
   const parts: string[] = [];
   for (const r of readings) {
-    const s = await stat(path.join(MATERIALS_DIR, r.file)).catch(() => null);
+    const p = filePathOf(r);
+    const s = p ? await stat(p).catch(() => null) : null;
     parts.push(`${r.id}:${r.file}:${s ? `${s.size}@${s.mtimeMs}` : "missing"}`);
   }
   return parts.join("|");
@@ -308,4 +353,66 @@ export function passageBlock(passages: Passage[]): string {
   return passages
     .map((p) => `--- from "${p.title}" (part ${p.part})${p.link ? ` · ${p.link}` : ""} ---\n${p.text}`)
     .join("\n\n");
+}
+
+// ---------- uploads ----------
+
+// Adding a reading used to cost a container build. It now costs a drag and
+// drop: the file lands in DATA_DIR/materials, which docker/sync.mjs restores
+// at boot and snapshots on a timer, and the manifest there is rewritten to
+// match. The index rebuilds on its own — indexKey() watches file size and
+// mtime, so the next question already sees the new reading.
+//
+// Callers are trusted to have checked that the uploader is the instructor.
+// This port binds to 127.0.0.1; the virtual space is the gatekeeper.
+
+const ALLOWED_EXT = new Set([".md", ".markdown", ".html", ".htm", ".txt", ".pdf"]);
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+export interface UploadRequest {
+  id: string;
+  title: string;
+  filename: string;
+  bytes: Buffer;
+  agenda?: boolean;
+  pinned?: boolean;
+  link?: string;
+}
+
+export async function saveUpload(req: UploadRequest): Promise<{ ok: boolean; note: string; id?: string }> {
+  const id = req.id.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) {
+    return { ok: false, note: "The id must be lowercase letters, digits and hyphens." };
+  }
+  // basename() alone, so neither "../" nor an absolute path survives.
+  const filename = path.basename(req.filename.trim());
+  const ext = path.extname(filename).toLowerCase();
+  if (!ALLOWED_EXT.has(ext)) {
+    return { ok: false, note: `${ext || "That file type"} is not a reading — use .md, .html, .txt or .pdf.` };
+  }
+  if (!req.bytes.length) return { ok: false, note: "That file is empty." };
+  if (req.bytes.length > MAX_UPLOAD_BYTES) {
+    return { ok: false, note: `That file is ${Math.round(req.bytes.length / 1e6)} MB — the limit is 20 MB.` };
+  }
+
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  // The id owns the filename, so re-uploading a reading replaces its file
+  // instead of leaving the old bytes orphaned under a different name.
+  const stored = `${id}${ext}`;
+  await writeFile(path.join(UPLOAD_DIR, stored), req.bytes);
+
+  const readings = (await manifestAt(UPLOAD_DIR)).filter((r) => r.id !== id);
+  const entry: Reading = { id, title: req.title.trim() || id, file: stored };
+  if (req.link) entry.link = req.link;
+  if (req.pinned) entry.pinned = true;
+  if (req.agenda) entry.agenda = true;
+  // Only one agenda: marking a new one un-marks the old, or the schedule
+  // would depend on manifest order.
+  if (req.agenda) for (const r of readings) delete r.agenda;
+  readings.push(entry);
+  await writeFile(
+    path.join(UPLOAD_DIR, "manifest.json"),
+    JSON.stringify({ readings }, null, 2) + "\n"
+  );
+  return { ok: true, id, note: `"${entry.title}" is on the shelf.` };
 }

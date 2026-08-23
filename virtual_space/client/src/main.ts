@@ -792,6 +792,43 @@ function wirePanel() {
     box.value = "";
   };
 
+  // Adding a reading, without a redeploy. The file goes to the space, which
+  // checks the uploader is the instructor and forwards it to the corpus; the
+  // TA picks it up on the next question and the Library shelf on the next
+  // visit. Sent as a raw body with the metadata in the query string — no
+  // multipart parser, no base64 round-trip.
+  $<HTMLButtonElement>("up-send").onclick = async () => {
+    const picker = $<HTMLInputElement>("up-file");
+    const file = picker.files?.[0];
+    if (!file) return setAdminStatus("Pick a file first.", false);
+    const titleBox = $<HTMLInputElement>("up-title");
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const title = titleBox.value.trim() || base;
+    // The id is derived, not asked for: it is a URL and a manifest key, not
+    // something the instructor should have to invent a convention for.
+    const id = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
+    const agenda = $<HTMLInputElement>("up-agenda").checked;
+    const qs = new URLSearchParams({ id, title, filename: file.name });
+    if (agenda) qs.set("agenda", "1");
+    setAdminStatus(`Uploading ${file.name}…`, true);
+    try {
+      const res = await fetch(`/api/materials?${qs}`, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: file,
+      });
+      const body = (await res.json()) as { ok: boolean; note: string };
+      setAdminStatus(body.note, body.ok);
+      if (body.ok) {
+        picker.value = "";
+        titleBox.value = "";
+        $<HTMLInputElement>("up-agenda").checked = false;
+      }
+    } catch {
+      setAdminStatus("The upload did not go through.", false);
+    }
+  };
+
   // Lecturer mic → class transcript in the TA brain (Chrome Web Speech).
   const micBtn = $<HTMLButtonElement>("mic-toggle");
   const micState = $<HTMLSpanElement>("mic-state");

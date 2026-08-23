@@ -132,6 +132,13 @@
   .feed-item button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
   .feed-item button:hover { color: #ff8fa3; }
   .feed-empty { color: var(--muted); font-size: 12px; font-style: italic; }
+  #upload-box { border: 1px solid #2c5443; background: #16281f; border-radius: 10px; padding: 10px 12px; }
+  #upload-box .admin-title { color: var(--ok); margin-bottom: 8px; }
+  #upload-box .row { margin-bottom: 8px; }
+  #upload-box .row:last-child { margin-bottom: 0; }
+  #upload-box input[type=file] { flex: 1; font-size: 12px; padding: 5px 7px; background: #10201a; border-color: #2c5443; }
+  #upload-box input[type=text], #up-title { background: #10201a; border-color: #2c5443; }
+  #upload-box label { flex: 1; color: var(--muted); font-size: 12px; }
   #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
   #mic-toggle.on { background: #4d2020; border-color: #a04545; }
 </style>
@@ -198,6 +205,25 @@
         <!-- What is currently on the selected board. The instructor has no
              avatar and cannot walk up to a board to read it back. -->
         <div id="post-feed"></div>
+      </div>
+      <hr class="sep">
+      <!-- Adding a reading used to cost a container build. The file goes to
+           DATA_DIR, which survives a redeploy, and the TA indexes it on the
+           next question. -->
+      <div id="upload-box">
+        <div class="admin-title">📚 Add course material</div>
+        <div class="row">
+          <input type="file" id="up-file" accept=".md,.markdown,.html,.htm,.txt,.pdf">
+        </div>
+        <div class="row">
+          <input id="up-title" placeholder="Title students will see" style="flex:1">
+        </div>
+        <div class="row">
+          <label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="up-agenda" style="flex:0"> this is the course agenda
+          </label>
+          <button id="up-send" class="primary">Upload</button>
+        </div>
       </div>
       <hr class="sep">
       <div class="row">
