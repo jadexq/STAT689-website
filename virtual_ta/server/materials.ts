@@ -1,9 +1,22 @@
 // Course grounding. The instructor drops readings into materials/ and lists
-// them in manifest.json; every skill grounds on this same curated set. For
-// v1 the selected reading's full text goes into the prompt (chunked
-// retrieval with embeddings is the later upgrade for large collections).
+// them in manifest.json.
+//
+// Two ways in. If the student NAMES a document, its full text goes into the
+// prompt (loadReading) — nothing beats the whole thing when it fits. If they
+// just ask a question, searchMaterials picks the most relevant passages
+// across every document.
+//
+// The search is keyword scoring over ~1,500-character chunks: no embedding
+// provider, no vector store, no build step. That is a deliberate stop short
+// of the vector retrieval this comment used to promise. With a handful of
+// readings, tf-idf over chunks finds the right passage and costs nothing;
+// past roughly twenty documents it is worth revisiting.
+//
+// Chunking earns its keep either way: two whole documents at the 28k cap
+// would blow out prompt cost and latency long before retrieval quality
+// became the binding constraint.
 
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { extractText } from "unpdf";
 
@@ -23,10 +36,11 @@ export async function listReadings(): Promise<Reading[]> {
   return (manifest.readings ?? []) as Reading[];
 }
 
-export async function loadReading(id: string): Promise<{ reading: Reading; text: string } | null> {
-  const reading = (await listReadings()).find((r) => r.id === id);
-  if (!reading) return null;
+// Full text of one reading, PDFs extracted and HTML stripped. Uncapped —
+// callers decide how much of it they can afford.
+async function rawText(reading: Reading): Promise<string | null> {
   const filePath = path.join(MATERIALS_DIR, reading.file);
+  // Keep a manifest entry from reaching outside materials/ with "../".
   if (path.relative(MATERIALS_DIR, filePath).startsWith("..")) return null;
 
   let text: string;
@@ -39,7 +53,14 @@ export async function loadReading(id: string): Promise<{ reading: Reading; text:
     text = await readFile(filePath, "utf8");
     if (ext === ".html" || ext === ".htm") text = stripHtml(text);
   }
-  text = text.replace(/\r\n/g, "\n").trim();
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
+export async function loadReading(id: string): Promise<{ reading: Reading; text: string } | null> {
+  const reading = (await listReadings()).find((r) => r.id === id);
+  if (!reading) return null;
+  let text = await rawText(reading);
+  if (text === null) return null;
   if (text.length > MAX_READING_CHARS) {
     text = text.slice(0, MAX_READING_CHARS) + "\n\n[…reading truncated for length…]";
   }
@@ -84,4 +105,159 @@ export function stripHtml(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n");
+}
+
+// ---------- retrieval over chunks ----------
+
+const CHUNK_CHARS = 1_500;
+const CHUNK_OVERLAP = 200; // so an answer straddling a boundary is not halved
+const DEFAULT_CONTEXT_CHARS = 12_000;
+const MAX_CHUNKS_PER_DOC = 4; // one long document must not crowd out the rest
+
+export interface Passage {
+  readingId: string;
+  title: string;
+  link?: string;
+  part: number; // 1-based position of the chunk within its document
+  text: string;
+}
+
+// Words too common to discriminate. Short tokens are dropped separately, so
+// this only needs the frequent long ones.
+const STOPWORDS = new Set([
+  "the", "and", "that", "this", "with", "from", "have", "has", "was", "were", "are", "for",
+  "you", "your", "what", "which", "when", "where", "how", "why", "does", "did", "can", "about",
+  "into", "than", "then", "them", "they", "there", "their", "would", "could", "should", "will",
+  "been", "being", "some", "more", "most", "much", "many", "also", "just", "like", "over",
+  "such", "these", "those", "explain", "tell", "know",
+]);
+
+function terms(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+}
+
+// Split on blank lines and regroup into chunks, so a chunk boundary lands
+// between paragraphs wherever the paragraphs are small enough to allow it.
+function chunkText(text: string): string[] {
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  const flush = () => {
+    if (cur.trim()) out.push(cur.trim());
+    cur = "";
+  };
+  for (const para of paras) {
+    if (para.length >= CHUNK_CHARS) {
+      flush();
+      // A single huge paragraph (common in extracted PDFs) is cut on length,
+      // with an overlap so a sentence spanning the cut survives in one piece.
+      for (let i = 0; i < para.length; i += CHUNK_CHARS - CHUNK_OVERLAP) {
+        out.push(para.slice(i, i + CHUNK_CHARS));
+      }
+      continue;
+    }
+    if (cur.length + para.length + 2 > CHUNK_CHARS) flush();
+    cur += (cur ? "\n\n" : "") + para;
+  }
+  flush();
+  return out;
+}
+
+interface Indexed extends Passage {
+  tf: Map<string, number>;
+  titleTerms: Set<string>;
+}
+
+let index: { key: string; chunks: Indexed[]; df: Map<string, number> } | null = null;
+
+// Rebuild when the manifest or any file changes, so the instructor can drop
+// in a reading without restarting the server.
+async function indexKey(readings: Reading[]): Promise<string> {
+  const parts: string[] = [];
+  for (const r of readings) {
+    const s = await stat(path.join(MATERIALS_DIR, r.file)).catch(() => null);
+    parts.push(`${r.id}:${r.file}:${s ? `${s.size}@${s.mtimeMs}` : "missing"}`);
+  }
+  return parts.join("|");
+}
+
+async function buildIndex(): Promise<NonNullable<typeof index>> {
+  const readings = await listReadings();
+  const key = await indexKey(readings);
+  if (index?.key === key) return index;
+
+  const chunks: Indexed[] = [];
+  for (const r of readings) {
+    const text = await rawText(r).catch(() => null);
+    if (!text) continue;
+    const titleTerms = new Set(terms(r.title));
+    chunkText(text).forEach((t, i) => {
+      const tf = new Map<string, number>();
+      for (const w of terms(t)) tf.set(w, (tf.get(w) ?? 0) + 1);
+      chunks.push({ readingId: r.id, title: r.title, link: r.link, part: i + 1, text: t, tf, titleTerms });
+    });
+  }
+  const df = new Map<string, number>();
+  for (const c of chunks) for (const w of c.tf.keys()) df.set(w, (df.get(w) ?? 0) + 1);
+  index = { key, chunks, df };
+  console.log(`[virtual-ta] indexed ${chunks.length} chunks from ${readings.length} document(s)`);
+  return index;
+}
+
+// The most relevant passages across every course document, best first, up to
+// a character budget. Empty when nothing matches — the caller should then say
+// the materials do not cover it rather than pretend otherwise.
+export async function searchMaterials(
+  query: string,
+  budgetChars = DEFAULT_CONTEXT_CHARS
+): Promise<Passage[]> {
+  const { chunks, df } = await buildIndex();
+  if (!chunks.length) return [];
+  const q = [...new Set(terms(query))];
+  if (!q.length) return [];
+  const N = chunks.length;
+
+  const scored = chunks.map((c) => {
+    let score = 0;
+    for (const w of q) {
+      const n = df.get(w);
+      if (!n) continue;
+      const idf = Math.log(1 + N / n);
+      const tf = c.tf.get(w) ?? 0;
+      // Saturating tf: the tenth occurrence of a word says little more than
+      // the second, and without this a long chunk wins on repetition alone.
+      if (tf) score += idf * (1 + Math.log(tf));
+      // A term in the document's TITLE is strong evidence about the document,
+      // so it lifts every chunk of it — that is how "the attention reading"
+      // pulls up passages that never repeat the word.
+      if (c.titleTerms.has(w)) score += idf * 0.75;
+    }
+    return { c, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const out: Passage[] = [];
+  const perDoc = new Map<string, number>();
+  let used = 0;
+  for (const { c, score } of scored) {
+    if (score <= 0) break;
+    const n = perDoc.get(c.readingId) ?? 0;
+    if (n >= MAX_CHUNKS_PER_DOC) continue;
+    if (used + c.text.length > budgetChars) continue;
+    perDoc.set(c.readingId, n + 1);
+    used += c.text.length;
+    out.push({ readingId: c.readingId, title: c.title, link: c.link, part: c.part, text: c.text });
+  }
+  return out;
+}
+
+// The passages laid out for a prompt, each labelled with the document it
+// came from so the TA can name its source instead of implying one.
+export function passageBlock(passages: Passage[]): string {
+  return passages
+    .map((p) => `--- from "${p.title}" (part ${p.part})${p.link ? ` · ${p.link}` : ""} ---\n${p.text}`)
+    .join("\n\n");
 }

@@ -501,7 +501,7 @@ class WorldScene extends Phaser.Scene {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function addMsg(opts: { who: string; text: string; room?: string; cls?: string; skill?: string }) {
+function addMsg(opts: { who: string; text: string; room?: string; cls?: string; skill?: string; sources?: string[] }) {
   const log = $<HTMLDivElement>("chat-log");
   const div = document.createElement("div");
   div.className = "msg " + (opts.cls || "");
@@ -519,6 +519,14 @@ function addMsg(opts: { who: string; text: string; room?: string; cls?: string; 
     const tag = document.createElement("span");
     tag.className = "room-tag";
     tag.textContent = "via " + opts.skill;
+    div.appendChild(tag);
+  }
+  // Where the answer came from. The server reports this, so it is there
+  // whether or not the model remembered to say so in the text.
+  for (const src of opts.sources ?? []) {
+    const tag = document.createElement("span");
+    tag.className = "room-tag src-tag";
+    tag.textContent = "📄 " + src;
     div.appendChild(tag);
   }
   const body = document.createElement("span");
@@ -829,7 +837,7 @@ function wireRoom(client: Client) {
     scene?.updateEntities(latestWorld);
   });
 
-  room.onMessage("chat", (msg: { from: string; id: string; kind: string; text: string; room: string; skill?: string }) => {
+  room.onMessage("chat", (msg: { from: string; id: string; kind: string; text: string; room: string; skill?: string; sources?: string[] }) => {
     typingFrom.delete(msg.from);
     renderTyping();
     const mine = msg.id === init?.you || msg.id === "admin";
@@ -838,6 +846,7 @@ function wireRoom(client: Client) {
       text: msg.text,
       room: msg.room,
       skill: msg.skill,
+      sources: msg.sources,
       cls: (msg.room === "private" ? "private " : "") + (mine ? "me" : msg.kind === "agent" ? "agent" : ""),
     });
   });

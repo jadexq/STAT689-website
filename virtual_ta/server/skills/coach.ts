@@ -10,7 +10,7 @@
 
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
-import { listReadings, loadReading, matchReading } from "../materials.ts";
+import { listReadings, loadReading, matchReading, passageBlock, searchMaterials } from "../materials.ts";
 import { readQuestions, recordQuestion, writeDigest } from "../logger.ts";
 import type { Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
@@ -27,17 +27,41 @@ export async function coach(session: Session, message: string): Promise<SkillRes
   const named = await matchReading(text);
   if (named) session.readingId = named.id;
   if (!session.readingId) {
-    // No reading picked yet: answer the student's question first, then
-    // invite them to pick one — never stonewall with just the list.
+    // Nothing in focus: search every document for the passages that answer
+    // this question. The student never has to know which file it lives in —
+    // that is the whole point of asking a TA rather than a folder.
     const readings = await listReadings();
     const list = readings.map((r) => `- ${r.title}${r.link ? ` (${r.link})` : ""}`).join("\n");
+    const passages = await searchMaterials(text);
+
+    if (passages.length) {
+      const found = [...new Set(passages.map((p) => p.title))];
+      const system = `${BASE_PERSONA}
+
+A student asked a question. The passages below were retrieved from the course materials because they look relevant.
+Rules:
+- Answer directly and completely, grounded in these passages.
+- Name the document each part of your answer came from, so the student can go and read it.
+- The passages are excerpts, not whole documents. If they do not actually answer the question, say so, then answer from general knowledge and label that clearly as outside the course material.
+- Never present general knowledge as something a course document says.
+- Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
+- Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
+
+RETRIEVED PASSAGES:
+${passageBlock(passages)}`;
+      const reply = await chatLLM(system, session.history, { maxTokens: 600, temperature: 0.7 });
+      return { reply, data: { sources: found } };
+    }
+
+    // Nothing matched. Say so rather than implying the materials were
+    // consulted and agreed — a confident answer with no source is exactly
+    // what students should not learn to trust here.
     const system = `${BASE_PERSONA}
 
-A student has asked you something, and no course document is in focus yet.
+A student has asked you something, and nothing in the course materials matched it.
 Rules:
-- Answer their question directly and helpfully. Be clear that you are answering from general knowledge, not from the course materials.
+- Answer their question directly and helpfully, and say plainly that this one is not covered by the course materials — you are answering from general knowledge.
 - If they ask what materials are available, list the course documents below with their links.
-- If one of the documents below plainly covers their question, name it and offer to answer from it.
 
 COURSE MATERIALS:
 ${list}`;
@@ -61,7 +85,8 @@ Rules:
 - Answer directly and completely. Do not withhold the answer or turn it back into a question.
 - Ground the answer in the document below, and say where it comes from — quote or point to the part you used, so the student can go and read it.
 - If the document does not cover what they asked, say so plainly, then answer from general knowledge and label it as outside the course material. Never dress up general knowledge as something the document says.
-- Keep it to a few sentences plus at most one small code snippet unless they ask for more.
+- Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
+- Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
 
 THE DOCUMENT — "${loaded.reading.title}":
 ---
@@ -69,7 +94,7 @@ ${loaded.text}
 ---`;
 
   const reply = await chatLLM(system, session.history, { maxTokens: 600, temperature: 0.7 });
-  return { reply };
+  return { reply, data: { sources: [loaded.reading.title] } };
 }
 
 async function questionDigest(session: Session, text: string): Promise<SkillResult> {

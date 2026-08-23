@@ -456,6 +456,10 @@ export class MainRoom extends Room {
     try {
       let text: string;
       let skill: string | undefined;
+      // Which course documents the answer was grounded in. Reported by the
+      // brain rather than asked of the model in prose: a citation the model
+      // has to remember to write is a citation it will sometimes skip.
+      let sources: string[] | undefined;
       if (agent.id === TA_ID) {
         // The TA answers with the real Virtual TA brain, one persistent TA
         // session per student. No skill is forced from here any more — the
@@ -464,13 +468,15 @@ export class MainRoom extends Room {
         const res = await taChat(who, sender.text);
         text = res.reply;
         skill = res.skill;
+        const src = (res.data as any)?.sources;
+        if (Array.isArray(src) && src.length) sources = src.map(String).slice(0, 3);
       } else {
         // Virtual students keep the thin local persona.
         const label = roomById(rid)!.label;
         text = await agentReply(agent.def, label, this.occupantNames(rid), this.history.get(rid) || []);
       }
       this.pushHistory(rid, { name: agent.name, text });
-      this.deliverToRoom(rid, { from: agent.name, id: agent.id, kind: "agent", text, skill });
+      this.deliverToRoom(rid, { from: agent.name, id: agent.id, kind: "agent", text, skill, sources });
       logEvent("chat", { who: agent.name, room: rid, text, agent: true, ...(skill ? { skill } : {}) });
     } catch (err: any) {
       logEvent("agent_error", { who: agent.name, error: String(err?.message || err) });
@@ -498,7 +504,11 @@ export class MainRoom extends Room {
     client.send("typing", { name: ta.name });
     try {
       const res = await taChat(this.taWho(client, "admin"), text);
-      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
+      const src = (res.data as any)?.sources;
+      client.send("chat", {
+        from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private",
+        ...(Array.isArray(src) && src.length ? { sources: src.map(String).slice(0, 3) } : {}),
+      });
       logEvent("chat", { who: ta.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
       logEvent("agent_error", { who: ta.name, error: String(err?.message || err) });
@@ -691,7 +701,7 @@ export class MainRoom extends Room {
   // (the admin "hears" whatever room the TA is in).
   private deliverToRoom(
     rid: string,
-    payload: { from: string; id: string; kind: string; text: string; skill?: string }
+    payload: { from: string; id: string; kind: string; text: string; skill?: string; sources?: string[] }
   ) {
     const label = roomById(rid)?.label || rid;
     this.sendToRoomClients(rid, "chat", { ...payload, room: label });
