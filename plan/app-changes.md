@@ -35,11 +35,40 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Announcements, a real Library, and the project repo
 
-**Status:** **step 1 shipped 2026-08-23**, verified locally — `30dfd60`, `a5278ab`, `bf9f13c`,
-`2786317`, plus the suite commit. **Steps 2-3 not started.** **Not deployed.** Two pieces of
-*enabling* work landed first so the plan could be checked against real documents rather than a
-fixture: `7e4b2c0` (a `MATERIALS_DIR` override and `npm run test:materials`) and `7539de7` (test
-fixtures gitignored); both are what turned 2f from an estimate into a measurement.
+**Status:** **steps 1 and 2 shipped 2026-08-23**, verified locally. Step 1 — `30dfd60`,
+`a5278ab`, `bf9f13c`, `2786317`, `fd4efa3`. Step 2 — `9602a52` (2a), `2a531b3` (2b), `45fb3b4`
+(2c), `9830cd1` (2d), `05ddb35` (2e), `9c8aa52` (2f), plus `f314f8c` (suites). **Step 3 not
+started.** **Not deployed.** Two pieces of *enabling* work landed first so the plan could be
+checked against real documents rather than a fixture: `7e4b2c0` (a `MATERIALS_DIR` override and
+`npm run test:materials`) and `7539de7` (test fixtures gitignored); both are what turned 2f from
+an estimate into a measurement.
+
+**What step 2 cost that the plan did not predict.** Four things, none large:
+
+1. **2a is two servers, not one.** The plan listed only `virtual_space/server/index.ts`. There was
+   nothing on the TA side to proxy *to* — `/api/materials/:id/file` had to be built there first.
+2. **The agenda parser is its own module** (`virtual_ta/server/agenda.ts`), not part of
+   `materials.ts` as written. Rows, spans and dates are a separate set of concepts from retrieval,
+   and `materials.ts` was already 290 lines.
+3. **2e needed an authorization decision the plan had not reached.** The upload is the first
+   *write* on the browser-reachable side of the proxy, so it is the first HTTP route that needs an
+   identity check at all — every other route is a read. `identify(req)` and a 403, because the TA
+   cites every reading as authoritative and a student-supplied "reading" would inherit that.
+   The route also honours `?as=…` locally, which is what makes the guard testable.
+4. **2c and 2d needed an endpoint the plan had not named:** `GET /api/agenda` on the TA, proxied,
+   so the Library can render the schedule. The prompt side reads the corpus directly, as decided —
+   this is only the display path.
+
+**Two findings to carry forward, neither fixed here:**
+
+- **There is no way to remove an uploaded reading.** 1d's argument applies exactly: the instructor
+  can pin *and* unpin a board post because a mistake must not be permanent. They can upload a
+  reading and never take it down. Re-uploading the same id replaces it, which covers a correction
+  but not a withdrawal. Small, and out of step 2's scope — but it is the same gap 1d existed to
+  close, one system over.
+- **The TA now answers dates in ISO.** 2d puts the schedule in the prompt as `2026-11-18`, and the
+  model has adopted that as house style even when quoting an announcement that said `11/18`.
+  Unambiguous, slightly robotic. Left alone deliberately; noted because it changed a test.
 
 **What step 1 cost that the plan did not predict:** one latent bug, found by building 1d. Board
 item ids were `post-<ms>-<list length + 1>`, unique only while lists grew — and unpinning shrinks
@@ -206,6 +235,14 @@ root under `DATA_DIR` so uploads and the shipped fixture can coexist, plus the u
 Existing suites, plus the new leg in 1e. `npx tsc --noEmit` clean. The order-dependency rule
 still holds — the first four suites run against a fresh server, in order.
 
+**Done 2026-08-23**, all six green in order against a fresh server: `smoke`, `integration`,
+`multiuser`, `ghost-test`, `materials`, `idle`. `npx tsc --noEmit` clean in both projects.
+
+**`idle-test` needs three variables on the server, not two** — `SOLO_WARN_S=4 SOLO_IDLE_S=8
+HOME_IDLE_S=10`. Its own header says so; running with the first two passes four steps and then
+fails step 5 against the real ten-minute window, which reads like a regression and is not one.
+Same family as the trap below.
+
 **Run `materials-test` as `npm run test:materials`, never bare.** `virtual_ta` loads `.env` only
 through node's `--env-file-if-exists`, which the npm scripts pass and a bare `npx tsx` does not.
 Run bare, the suite silently reads the committed fixture instead of the real corpus and reports
@@ -215,7 +252,7 @@ variables belonging on the server, and as the `server/env.ts` import-order trap.
 | Suite | What it must show after this |
 |---|---|
 | `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
-| `integration` | board count 2 → 8; the announcement→TA leg from 1e |
+| `integration` | board count 2 → 8; the announcement→TA leg from 1e; the corpus over HTTP and the upload guard |
 | `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
 | `materials-test` | agenda parsed with spanning topics and four-digit years, and an undatable row reported rather than guessed; a malformed row still renders; each format (`.md`, `.html`, `.pdf`) extracts to sane text; **a question whose answer lives in the last quarter of the 113 KB reading is answered correctly** — the 2f regression test; README present after 3b |
 | `idle-test` | unchanged |
