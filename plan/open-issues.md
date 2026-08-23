@@ -346,7 +346,12 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 - **Worth checking `boards.json` reaches the snapshot.** It lives under `DATA_DIR`, which
   `docker/sync.mjs` watches, so it should — but if posts ever do work and then vanish across a
   restart, that is a different bug from this one and should not be confused with it.
-- **Resolved when:** the TA pins a post to the Library board in the deployed app, a student
+- **Evidence 2026-08-22, after the role change (`dc57bf8`):** the `smoke` suite step 6 —
+  compose, preview, pin to the Library, student walks in and sees it — **passes locally**. The
+  board path is not broken. This makes "wrong mode, not a defect" the leading explanation, but
+  it is not proof: smoke runs locally, the report was against the deployed service. See
+  [`app-changes.md`](./app-changes.md), 2026-08-22 entry.
+- **Resolved when:** the TA pins a post to the Library board **in the deployed app**, a student
   walking in sees it, and it survives an instance restart.
 
 ---
