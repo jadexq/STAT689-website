@@ -150,12 +150,94 @@ levels tie almost every pair into uselessness. The scale changed because its job
 byte-identical across all six versions of a section, and if `content_sha` and `prompt_template`
 ride on every record. Dropping the probe simplifies the interface, not the schema.
 
+### Seven gaps closed 2026-08-23, before executing
+
+The audit that step 3 got and this entry had not. Each of these would have been guessed by a
+fresh session, and two of them would have been guessed *wrong in a way that corrupts the balance*.
+
+**1. Where any of it lives on disk.** Named nowhere above. It is:
+
+```
+DATA_DIR/space/handouts/<handout_id>.handout.json          ← the uploaded bundle
+DATA_DIR/space/handouts/responses/<handout_id>/<hash>.json ← one file per student
+```
+
+`paths.ts` already appends `space/` to `DATA_DIR`, so this is `handouts/` under it. One writer per
+response file, which is what keeps six students clicking at once from clobbering each other — but
+a *single* student clicking quickly is a read-modify-write on their own file, so writes to one
+file serialise through a per-path promise chain. Six students and a dozen clicks each does not
+justify anything more than that.
+
+**2. The rotation has no `studentIndex` for anyone off the roster — including the instructor.**
+`slotFor()` returns undefined for any address not in `STUDENTS`, and `homeRoomFor()` drops them in
+the commons with no office. Two different people hit this and they need different answers:
+
+- **The admin**, who has no avatar and no slot, gets a **preview**: `?version=C` selects
+  explicitly, the first version is the default, and **nothing is recorded**. The handout page is
+  where the instructor checks rendering; the dashboard is where they read results.
+- **An off-roster student** is refused, loudly — "you are not on the class roster for this
+  handout" — and the attempt is logged. *Not* silently given index 0: that is a real student's
+  rotation, and two people on one rotation quietly destroys the Latin square that decision 1
+  exists to guarantee. The fix is a one-line `STUDENTS` change, which has to happen before the
+  first handout regardless. The instructor's own `@tamu.edu` address is exactly this case today.
+
+**3. Delivery is named but not mechanised, and it must not write to a board.** "A link on their
+own office board" was the sentence; `boards.json` holds the instructor's own words pinned verbatim
+(1b), and having the app post there would put its wording in the instructor's mouth under their
+signature. Instead: `GET /api/handouts` lists what the caller may open, and the client renders a
+**📝 Handouts** list in the side panel when the student is in their own office — the third use of
+the fetch-on-room-entry idiom, after the Library shelf (2b) and the repo cards (3a). If the
+instructor wants to announce it, they announce it themselves, in their own words.
+
+**4. The bundle format itself was never written down.** `handout-authoring.md` describes the
+*source directory*; nothing described what the bundler emits. It is the source, flattened, with
+the hashes precomputed:
+
+```json
+{
+  "schema_version": 1,
+  "handout_id": "…", "title": "…", "chapter": "…", "term": "…",
+  "versions": ["A", "B", "C"],
+  "sections": [
+    { "section_id": "…", "title": "…", "learning_objective": "…",
+      "bodies": { "A": { "markdown": "…", "content_sha": "…", "approach": "…",
+                         "generation": { … } } } }
+  ]
+}
+```
+
+`content_sha` is over the **body only**, front-matter excluded — so fixing a typo in an objective
+does not invalidate grades on prose that did not change.
+
+**5. Front-matter needs a real YAML parser, and only the bundler needs it.** The authoring format
+uses folded scalars (`learning_objective: >`) and a nested `generation:` mapping; hand-rolling
+that is how you get a silently truncated objective. Add `yaml` to `virtual_space` as a
+**devDependency** — the bundler is a script, and the server only ever reads the JSON bundle. The
+runtime parses no YAML, which is worth keeping true.
+
+**6. The suite needs a fixture, and it must be tracked.** `virtual_space/fixtures/handout-sample/`
+— two sections × **three** versions, synthetic prose, no student or third-party content. Tracked
+in git, unlike `test_material/`: a suite whose fixture lives only in a gitignored directory is
+machine-dependent, which is the A1/A2 rule the suites were cleaned of once already. Three versions
+rather than six because it makes the "narrowing later still balances" assertion real rather than
+hypothetical.
+
+**7. Express 4 does not propagate async rejections.** The space's standing trap — every route
+added here needs its own try/catch, or a thrown error hangs the request instead of returning 500.
+The TA's express 5 propagates natively; the space's does not, and every route in `index.ts`
+already carries the explicit catch for this reason.
+
+**One property to preserve rather than decide:** nothing in this feature talks to the TA. Handouts
+are rendered, stored and reported entirely by the space, so a TA outage takes the chat down and
+leaves the handouts working. That falls out of decision 6's separation and is worth not breaking
+later by reaching for `llm.ts` to summarise comments.
+
 ### The commits
 
 | # | Commit | What changes | Files |
 |---|---|---|---|
-| 4a | **The handout store and its bundler** | Bundle format, loader, and `npm run bundle:handout` — which is also the validator: it refuses a title or a learning objective that differs between versions of a section, a section missing one of the declared versions, a missing `generation` block, or a duplicate `section_id`. Admin-only upload, mirroring 2e's guard exactly. | `virtual_space/server/handouts.ts`, `scripts/bundle-handout.ts`, `server/index.ts`, `package.json` |
-| 4b | **Rendering and assignment** | `GET /handout/:id` — identity from `identify()`, rotation resolved and recorded, sections stitched from the assigned versions, one page. Extends `render.ts` rather than forking it; adds KaTeX. | `virtual_space/server/handouts.ts`, `server/render.ts`, `client/static/katex/*` |
+| 4a | **The handout store and its bundler** | Bundle format, loader, and `npm run bundle:handout` — which is also the validator: it refuses a title or a learning objective that differs between versions of a section, a section missing one of the declared versions, a missing `generation` block, or a duplicate `section_id`. Admin-only `POST /api/handouts` taking the bundle as a JSON body, mirroring 2e's guard exactly. Ships `fixtures/handout-sample/`. | `virtual_space/server/handouts.ts`, `scripts/bundle-handout.ts`, `server/index.ts`, `package.json`, `fixtures/handout-sample/*` |
+| 4b | **Rendering and assignment** | `GET /handout/:id` — identity from `identify()` (honouring `?as=`), rotation resolved and recorded, sections stitched from the assigned versions, one page. Admin gets the `?version=` preview and writes nothing. `GET /api/handouts` lists what the caller may open; the client renders the **📝 Handouts** panel on entering one's own office. Extends `render.ts` rather than forking it; adds KaTeX. | `virtual_space/server/handouts.ts`, `server/render.ts`, `server/index.ts`, `client/src/main.ts`, `client/static/index.html`, `client/static/katex/*` |
 | 4c | **The section widget and the write path** | A 1–5 grade after each section; a grade of 3 or below reveals the tag list — `too_abstract`, `too_difficult`, `too_simple`, `too_long`, `missing_examples`, `poor_organization`, `unclear_notation` — and a comment box is always available. Autosaves on click, no submit button, restores on reload. `POST /api/handouts/:id/feedback` takes the student from `identify()` and **never** from the body. | `virtual_space/server/handouts.ts`, `server/index.ts`, `server/render.ts` |
 | 4d | **The instructor's view** | Admin-only `GET /admin/handouts/:id`: response rate per section, the grade each version drew, tag counts, comments verbatim — ordered worst-first, and aggregated by section rather than by person. `?format=jsonl` exports the graded records; `?format=jsonl&pairs=1` exports the derived preference triples, rater-mean-centred, ties dropped. | `virtual_space/server/handouts.ts`, `server/index.ts`, `client/src/main.ts` |
 
@@ -234,8 +316,9 @@ The derived export is a second shape over the same data, built at export time an
 
 ### Verification
 
-A new `virtual_space/scripts/handout-test.ts`, run against a fresh server, asserting the
-properties that cannot be eyeballed:
+A new `virtual_space/scripts/handout-test.ts`, run against a fresh server over
+`fixtures/handout-sample/` (two sections × three versions), asserting the properties that cannot
+be eyeballed:
 
 - all six students, all sections: **each version appears an equal number of times**, and within
   any single section the six students hold six distinct versions;
@@ -246,6 +329,9 @@ properties that cannot be eyeballed:
 - a student cannot read another student's responses, and cannot reach the dashboard;
 - feedback posted with someone else's email in the body is recorded against the **caller**;
 - with `HANDOUT_SALT` unset in IAP mode the routes 503 and the rest of the campus is unaffected;
+- an **off-roster** address is refused rather than given slot 0's rotation, and the admin's
+  `?version=` preview records nothing;
+- the bundler refuses each of the malformed fixtures it ships alongside the good one;
 - an export line round-trips: every field present, `content_sha` matching the rendered bytes,
   `learning_objective` identical across every version of a section;
 - the derived-pairs export produces no pair whose two sides differ in `section_id` or objective,
