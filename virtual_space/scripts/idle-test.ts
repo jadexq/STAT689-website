@@ -94,6 +94,15 @@ async function main() {
   console.log("\n3. Then she is walked home and the door reopens");
   await waitUntil(() => ana.notices.some((n) => /being freed/i.test(n.text)), BUDGET_MS, "Ana was told the office is being freed");
   await waitUntil(() => !inside(ana), 30000, "Ana left the TA office without touching anything");
+  // WHERE she lands, not just that she left — open-issues.md E8. This path
+  // walked every evicted occupant to one hardcoded office, which looks
+  // correct for exactly as long as one account holds that slot.
+  {
+    const h = spawn(ana.init!.home!);
+    const meA = () => ana.world.find((x) => x.id === ana.init!.you)!;
+    await waitUntil(() => meA().x === h.x && meA().y === h.y, 40000,
+      `…and was walked to HER OWN room (${ana.init!.home}), not somebody else's office`);
+  }
   omar.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inside(omar), 30000, "Omar can now get in");
 
@@ -112,23 +121,26 @@ async function main() {
   // A rostered student, so "home" is an office rather than the hall — the
   // hall is where an unassigned address lands, and you cannot be returned to
   // somewhere you already are.
-  const jade = await join(client, "jadewang@gmail.com");
-  if (jade.init!.home === "commons") {
-    console.log("  ! jadewang@gmail.com has no slot — set STUDENTS in .env. Skipping.");
+  // Whoever .env actually assigns a slot to. Hardcoding one address meant
+  // this block silently skipped every time the roster changed.
+  const who = (process.env.IDLE_TEST_STUDENT || "jadewang@tamu.edu").toLowerCase();
+  const student = await join(client, who);
+  if (student.init!.home === "commons") {
+    console.log(`  ! ${who} has no slot — set STUDENTS in .env, or IDLE_TEST_STUDENT. Skipping.`);
   } else {
-    const homeSpawn = spawn(jade.init!.home!);
-    const meJ = () => jade.world.find((x) => x.id === jade.init!.you)!;
+    const homeSpawn = spawn(student.init!.home!);
+    const meJ = () => student.world.find((x) => x.id === student.init!.you)!;
     const atHome = () => meJ().x === homeSpawn.x && meJ().y === homeSpawn.y;
-    assert(atHome(), `Jade started in their own room (${jade.init!.home})`);
-    jade.room.send("goto", spawn("library"));
+    assert(atHome(), `${who} started in their own room (${student.init!.home})`);
+    student.room.send("goto", spawn("library"));
     await waitUntil(() => { const l = spawn("library"); return meJ().x === l.x && meJ().y === l.y; }, 30000,
-      "Jade walked to the Library");
-    const nMark = jade.notices.length;
-    await waitUntil(() => jade.notices.slice(nMark).some((n) => /heading back/i.test(n.text)), BUDGET_MS,
-      "Jade was told they are being sent home");
+      `${who} walked to the Library`);
+    const nMark = student.notices.length;
+    await waitUntil(() => student.notices.slice(nMark).some((n) => /heading back/i.test(n.text)), BUDGET_MS,
+      `${who} was told they are being sent home`);
     await waitUntil(atHome, 40000, "…and walked back to their own room without touching anything");
   }
-  await jade.room.leave();
+  await student.room.leave();
 
   console.log("\nIDLE TEST PASSED ✅");
   await ana.room.leave();

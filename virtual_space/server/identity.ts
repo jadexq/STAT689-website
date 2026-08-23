@@ -19,14 +19,15 @@
 //                        REQUIRED when TRUST_IAP_HEADER=1 — see the note below
 //   IAP_JWKS_URL         override Google's key endpoint (tests only)
 //   ADMIN_EMAILS         comma-separated instructor allowlist
-//   ROSTER               "a@x.com:Sam,b@y.com:Ben" — avatar display names
 //   STUDENTS             "a@x.com=s1" — which student character each address
 //                        controls; see roster.ts
+//   ROSTER               "a@x.com:Sam" — display names. Parsed in roster.ts,
+//                        because it also names offices and dashboard rows
 //   DEV_USER             identity to assume when not behind IAP
 
 import type { IncomingMessage } from "http";
 import { createPublicKey, verify as cryptoVerify, type KeyObject } from "crypto";
-import { slotFor } from "./roster";
+import { displayNameFor } from "./roster";
 
 export interface Identity {
   email: string;
@@ -74,17 +75,6 @@ const ADMINS = new Set(
   (process.env.ADMIN_EMAILS ? csv(process.env.ADMIN_EMAILS) : TRUST_IAP ? [] : [DEV_USER]).map((e) =>
     e.toLowerCase()
   )
-);
-
-// "a@x.com:Sam,b@y.com:Ben" — only the email half is case-folded.
-const ROSTER = new Map<string, string>(
-  csv(process.env.ROSTER).flatMap((entry) => {
-    const i = entry.lastIndexOf(":");
-    if (i <= 0) return [];
-    const email = entry.slice(0, i).trim().toLowerCase();
-    const name = entry.slice(i + 1).trim();
-    return email && name ? [[email, name] as [string, string]] : [];
-  })
 );
 
 // ---------------------------------------------------------------------------
@@ -233,22 +223,10 @@ function parseIapEmail(raw: string | string[] | undefined): string | null {
   return email.includes("@") ? email : null;
 }
 
-// "sam.chen1998@gmail.com" -> "Sam Chen". A fallback only: ROSTER wins.
-function nameFromEmail(email: string): string {
-  const local = email.split("@")[0].replace(/[0-9]+/g, "");
-  const words = local
-    .split(/[._\-+]+/)
-    .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1));
-  return (words.join(" ") || email).slice(0, 24);
-}
-
-// Display name, most specific first: an explicit ROSTER entry, then the
-// character this student took over (a real student controls "Sam" until we
-// know their actual name), then a guess from the address.
+// An avatar label is one of four places a person's name is shown, and they
+// all have to agree; roster.ts owns the whole precedence chain.
 function build(email: string): Identity {
-  const name = ROSTER.get(email) || slotFor(email)?.name || nameFromEmail(email);
-  return { email, name, isAdmin: ADMINS.has(email) };
+  return { email, name: displayNameFor(email), isAdmin: ADMINS.has(email) };
 }
 
 function header(req: IncomingMessage | undefined, name: string): string | undefined {

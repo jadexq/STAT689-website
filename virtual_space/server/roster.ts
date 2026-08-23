@@ -3,17 +3,25 @@
 // A slot is a CHARACTER, not a person. Until a real student's address is
 // assigned to it the character is played by an AI stand-in; assign the
 // address and the same character becomes that student's avatar — same
-// office, same name. That is why the five names are placeholders rather
-// than decoration: a real student takes one over, they do not arrive
+// office, same name. That is why the placeholder names exist rather than
+// being decoration: a real student takes one over, they do not arrive
 // alongside it. See plan/app-changes.md, 2026-08-22.
 //
 // Addresses live in the environment, never in this file. This file is
-// tracked in git and student addresses are not ours to publish.
+// tracked in git and student addresses are not ours to publish. Neither are
+// their names — which is why ROSTER is parsed HERE rather than in
+// identity.ts, and why it drives every surface a name appears on rather than
+// only the avatar. See plan/app-changes.md, 2026-08-23.
+//
+// Slot ids are opaque handles (s1..s6). They deliberately do not look like
+// names: STUDENTS="alice@example.com=s6" means "give Alice that office", not
+// "call Alice s6", and an id that reads like a name invites the second
+// reading.
 //
 // Env:
 //   STUDENTS="alice@example.com=s1,bob@example.com=s2"
-//   ROSTER="alice@example.com:Alice Chen"   (display name; overrides the
-//                                            character's placeholder name)
+//   ROSTER="alice@example.com:Alice"   (display name — required behind IAP
+//                                       for every address STUDENTS assigns)
 
 import { roomById } from "./map";
 
@@ -27,6 +35,8 @@ export interface Slot {
   persona?: string;
 }
 
+const TRUST_IAP = process.env.TRUST_IAP_HEADER === "1";
+
 const STUDENT_BASE =
   "a virtual student enrolled in Jade Wang's flipped-classroom course on AI and large language model agents. " +
   "Talk casually like a peer — never like an assistant. Ask questions, react, occasionally admit confusion.";
@@ -39,10 +49,11 @@ export const SLOTS: Slot[] = [
   { id: "s3", office: "office-s3", name: "Chloe", color: "#f4d35e", persona: trait("Chloe", "You are theory-minded and happiest when the math is on the table.") },
   { id: "s4", office: "office-s4", name: "Dev",   color: "#9ad1d4", persona: trait("Dev",   "You are a systems person — GPUs, throughput, and inference costs excite you.") },
   { id: "s5", office: "office-s5", name: "Grace", color: "#ff8fa3", persona: trait("Grace", "You think like a product builder — you ask what users actually need.") },
-  // The instructor's own test-student account. No stand-in: an AI "Jade"
-  // next to an instructor called Jade would be a needless confusion, and
-  // this slot is never vacant in practice.
-  { id: "jade", office: "office-jade", name: "Jade", color: "#4da3ff" },
+  // No stand-in, and a placeholder rather than a character name. This slot
+  // is held by a real account in every deployment so far, so an AI persona
+  // here would only ever be in the way. The placeholder shows on the office
+  // door in the one case where the slot is vacant.
+  { id: "s6", office: "office-s6", name: "Student 6", color: "#4da3ff" },
 ];
 
 function csv(raw: string | undefined): string[] {
@@ -78,8 +89,66 @@ for (const [email, id] of ASSIGNED) {
   }
 }
 
+// "a@x.com:Sam,b@y.com:Ben" — only the email half is case-folded, because a
+// display name is a name and "tester" is not "Tester".
+const ROSTER = new Map<string, string>(
+  csv(process.env.ROSTER).flatMap((entry) => {
+    const i = entry.lastIndexOf(":");
+    if (i <= 0) return [];
+    const email = entry.slice(0, i).trim().toLowerCase();
+    const name = entry.slice(i + 1).trim();
+    return email && name ? [[email, name] as [string, string]] : [];
+  })
+);
+
 const BY_EMAIL = new Map<string, Slot>();
 for (const [email, id] of ASSIGNED) BY_EMAIL.set(email, SLOTS.find((s) => s.id === id)!);
+
+// "sam.chen1998@gmail.com" -> "Sam Chen". A fallback only: ROSTER wins.
+function nameFromEmail(email: string): string {
+  const local = email.split("@")[0].replace(/[0-9]+/g, "");
+  const words = local
+    .split(/[._\-+]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1));
+  return (words.join(" ") || email).slice(0, 24);
+}
+
+/**
+ * What to call this person, everywhere: the avatar, their office door, the
+ * `Roster:` line at startup, and the instructor's handout dashboard.
+ *
+ * Most specific first — an explicit ROSTER entry, then the character whose
+ * slot they took over, then a guess from the address. The whole chain lives
+ * here so the four surfaces cannot drift apart again; before 2026-08-23 only
+ * the avatar consulted ROSTER and the other three read the character's
+ * placeholder, which named nobody once a real person held the slot.
+ *
+ * Keep names short by convention: an office label is drawn inside a 6x6 room.
+ * Nothing enforces it.
+ */
+export function displayNameFor(email: string): string {
+  const e = email.trim().toLowerCase();
+  return ROSTER.get(e) || BY_EMAIL.get(e)?.name || nameFromEmail(e);
+}
+
+// An assigned address with no ROSTER name would put a character's placeholder
+// on a real person's office door and on the instructor's dashboard — silently,
+// and looking exactly like it worked. That is the shape of D5b, which cost an
+// afternoon. Behind IAP it is a boot failure; locally it is a warning, because
+// every test suite assigns slots and none of them care what the avatars are
+// called.
+{
+  const nameless = [...ASSIGNED.keys()].filter((e) => !ROSTER.has(e));
+  if (nameless.length) {
+    const msg =
+      `STUDENTS assigns ${nameless.length} address(es) with no ROSTER name: ${nameless.join(", ")}. ` +
+      `Each needs a "<email>:<Name>" pair in ROSTER — the name goes on their avatar, their office ` +
+      `door and the handout dashboard.`;
+    if (TRUST_IAP) throw new Error(msg);
+    console.warn(`! ${msg} Falling back to the slot placeholder.`);
+  }
+}
 
 // The slots that belong to a real person, in roster order. A slot with no
 // address is a character played by an AI, not a student who has not answered —
@@ -119,10 +188,11 @@ export function homeRoomFor(email: string): string {
 }
 
 export function rosterSummary(): string {
-  const held = SLOTS.filter((s) => emailOf(s.id));
+  const held = assignedStudents();
   const ai = standInSlots();
   return (
-    `${SLOTS.length} student slots — ${held.length} assigned (${held.map((s) => s.name).join(", ") || "none"}), ` +
+    `${SLOTS.length} student slots — ${held.length} assigned ` +
+    `(${held.map(({ email }) => displayNameFor(email)).join(", ") || "none"}), ` +
     `${ai.length} played by stand-ins (${ai.map((s) => s.name).join(", ") || "none"})`
   );
 }
@@ -130,4 +200,16 @@ export function rosterSummary(): string {
 // Fail loudly at boot if a slot names a room that does not exist.
 for (const s of SLOTS) {
   if (!roomById(s.office)) throw new Error(`Student slot "${s.id}" names unknown room "${s.office}"`);
+}
+
+// The office follows whoever holds the slot. ROOMS is handed to the client
+// wholesale and roomById().label feeds every piece of prose about a room, so
+// patching the one array covers all of them at once. Doing this in map.ts
+// instead would mean map.ts importing this file, which is the cycle the
+// import above already rules out.
+//
+// A vacant slot keeps the placeholder from map.ts — the character is still
+// the one whose door it is.
+for (const { slot, email } of assignedStudents()) {
+  roomById(slot.office)!.label = `${displayNameFor(email)}'s Office`;
 }

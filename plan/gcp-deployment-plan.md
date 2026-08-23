@@ -479,12 +479,13 @@ are relative to `virtual_space/` unless stated.
 | `scripts/integration.ts` | TA↔space wiring; nobody can be moved; sealed rooms; speak-as-TA; directing a stand-in | as above |
 | `scripts/multiuser.ts` | two identities coexist; admin is granted not claimed; the 1:1 door; separate TA sessions | as above |
 | `scripts/ghost-test.ts` | a rejoin replaces a stale avatar rather than adding one | as above |
-| `scripts/idle-test.ts` | the TA office frees on silence; idling anywhere else walks you home | **needs short windows on the SERVER**: `SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=12 npm run dev` |
-| `../virtual_ta/scripts/materials-test.ts` | the material index and passage search | `npx tsx scripts/materials-test.ts` — no LLM, no server |
+| `scripts/handout-test.ts` | feedback handouts — version rotation, the write path, the exports, the salt fingerprint | `npx tsx scripts/handout-test.ts` — brings its own servers, so nothing need be running |
+| `scripts/idle-test.ts` | the TA office frees on silence; idling anywhere else walks you home | **needs short windows on the SERVER**: `SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10 npm run dev`. Set `IDLE_TEST_STUDENT` if `STUDENTS` does not assign a slot to `jadewang@tamu.edu` |
+| `../virtual_ta/scripts/materials-test.ts` | the material index and passage search | `npm run test:materials` — no LLM, no server. **Never bare `npx tsx`**: that reads the committed fixture instead of the corpus `MATERIALS_DIR` names, and reports green against the wrong documents |
 | Container smoke | A6 | |
 | Post-deploy manual | IAP login, one student, one full chat, one board post | §6 stage 4 |
 
-**Run the first four against a FRESH space server, in that order.** Agent and avatar state
+**Run the first four against a FRESH space server, in that order.** (`handout-test.ts` owns its own, so it is exempt.) Agent and avatar state
 persists for the life of the process, and a suite that only passes in one order will eventually
 be believed when it should not be (`open-issues.md` A2, E5).
 

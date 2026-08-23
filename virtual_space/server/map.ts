@@ -2,7 +2,7 @@
 // (hand-authoring the walls got error-prone at this size).
 //
 // Layout (43 x 21 tiles):
-//   rows  1-6   five student offices (S1-S5) + Jade's office
+//   rows  1-6   six student offices (S1-S6)
 //   rows  8-12  commons — the hall
 //   rows 14-19  Classroom | Prep Room | Library | Computer Lab | TA Office
 //
@@ -54,13 +54,14 @@ const OFFICE_TINT_A = "#2e3a54";
 const OFFICE_TINT_B = "#33405c";
 
 export const ROOMS: RoomDef[] = [
-  // --- band 1: five student offices + Jade (rows 1-6) ---
+  // --- band 1: six student offices (rows 1-6) ---
   { id: "office-s1",  label: "Sam's Office",   x1: 1,  y1: 1, x2: 6,  y2: 6, spawn: { x: 3,  y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   { id: "office-s2",  label: "Ben's Office",   x1: 8,  y1: 1, x2: 13, y2: 6, spawn: { x: 10, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   { id: "office-s3",  label: "Chloe's Office", x1: 15, y1: 1, x2: 20, y2: 6, spawn: { x: 17, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   { id: "office-s4",  label: "Dev's Office",   x1: 22, y1: 1, x2: 27, y2: 6, spawn: { x: 24, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   { id: "office-s5",  label: "Grace's Office", x1: 29, y1: 1, x2: 34, y2: 6, spawn: { x: 31, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  { id: "office-jade", label: "Jade's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  // Label patched at boot by roster.ts when a real address holds the slot.
+  { id: "office-s6",  label: "Student 6's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   // --- bottom band: special rooms + TA office (rows 14-19) ---
   { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special",
     ...(CLASSROOM_OPEN ? {} : { closed: true }) },

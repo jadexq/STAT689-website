@@ -25,6 +25,9 @@ virtual_space/client/static/bundle.js
 **/dist/
 
 # --- local data, never part of a deploy ---
+# test_material/ is gitignored, but this file REPLACES that inference, so it
+# has to be named here too or its fixtures upload and bake into the image.
+test_material/
 **/data/
 **/output/
 **/*.jsonl

@@ -389,7 +389,9 @@ export class MainRoom extends Room {
         // Count the eviction as an operation, or the general sweep below
         // fires on the same person mid-walk and sends a second notice.
         this.lastOp.set(occ.id, now);
-        const home = roomById("office-jade")!;
+        // Their OWN office, not a hardcoded one — open-issues.md E8, the
+        // call site E6 missed. Invisible while a single account holds a slot.
+        const home = roomById(homeRoomFor(this.identities.get(occ.id)?.email || ""))!;
         const path = findPath({ x: occ.x, y: occ.y }, home.spawn);
         if (c) this.notice(c, `You have been quiet for a while, so ${this.roomPhrase(r.id)} is being freed for the next student. Walk back in any time.`);
         logEvent("solo_vacated", { who: occ.name, room: r.id, reason: "idle" });
@@ -432,11 +434,14 @@ export class MainRoom extends Room {
     return true;
   }
 
-  // "the Library" but "Jade's Office" — a possessive label already carries
-  // its article, and "the Jade's Office" reads like a machine wrote it.
+  // "the Library" but "Sam's Office" — a possessive label already carries
+  // its article, and "the Sam's Office" reads like a machine wrote it. The
+  // possessive is not always on the first token: office labels are built from
+  // display names now, and a two-word name would otherwise produce "the
+  // Firstname Lastname's Office".
   private roomPhrase(rid: string): string {
     const label = roomById(rid)?.label ?? rid;
-    return /^\S+'s\s/.test(label) ? label : `the ${label}`;
+    return /'s\s/.test(label) ? label : `the ${label}`;
   }
 
   private notice(client: Client, text: string) {

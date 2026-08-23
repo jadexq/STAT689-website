@@ -1,7 +1,8 @@
 # Virtual Space — MVP (built, TA brain connected)
 
-The classroom virtual space: a 43×21 campus with **five virtual students**
-(Sam, Ben, Chloe, Dev, Grace — thin AI personas), Jade's office, a commons
+The classroom virtual space: a 43×21 campus with **six student offices** —
+five played by thin AI personas (Sam, Ben, Chloe, Dev, Grace) until a real
+address is assigned, and a sixth with no stand-in — a commons
 hall, and a bottom band of mode rooms — Prep Room / **Library** 📌 /
 **Computer Lab** 📌 / TA Office, plus a Classroom 🚧 that is sealed while
 its skill is on hold. **Terra** (the virtual TA) is powered by the real Virtual TA
@@ -85,9 +86,9 @@ for the full list. Beyond the LLM settings and `TA_BASE_URL`:
 |---|---|
 | `TRUST_IAP_HEADER` | `1` only behind Google IAP — makes the authenticated-user header authoritative. Unset locally: a header anyone can set is not a login. |
 | `ADMIN_EMAILS` | Instructor allowlist. Behind IAP, empty means nobody is an instructor; locally it defaults to `DEV_USER`. |
-| `ROSTER` | `email:Name` pairs for avatar labels. Without one, the name is guessed from the address. |
+| `ROSTER` | `email:Name` pairs. The only place a real name may live — `roster.ts` is tracked. Names the avatar, the office door, the `Roster:` startup line and the handout dashboard. **Required behind IAP** for every address `STUDENTS` assigns; locally a missing one warns and falls back to the character's placeholder. |
 | `DEV_USER` | Who you are when not behind IAP (default `jade@local`). |
-| `STUDENTS` | `email=slot` pairs — which student character each address controls (`s1`…`s5`, `jade`). Assigning a slot removes its AI stand-in. An address with no slot spawns in the Common Area **and is refused every handout**. |
+| `STUDENTS` | `email=slot` pairs — which student character each address controls (`s1`…`s6`; the ids are opaque handles, not names). Assigning a slot removes its AI stand-in and renames its office after the occupant. An address with no slot spawns in the Common Area **and is refused every handout**. |
 | `HANDOUT_SALT` | Salts the student hash on feedback records. Required behind IAP — the handout routes 503 without it rather than fall back to an unsalted hash over six known addresses. **Set once, never change it:** every hash moves with it. The app refuses to serve handouts if it disagrees with the data already on disk. |
 | `DATA_DIR` | Root for everything mutable. Unset locally (uses `data/`); a plain writable directory in the container. Not a bucket mount — see `../docker/sync.mjs`. |
 | `SNAPSHOT_URI` | Where that root is snapshotted (`gs://…` or `file://…`). Unset means no sync, which is right locally. |

@@ -8,6 +8,8 @@
 user_requirements
 improvements
 ref
+test_material
+plan
 .git
 .gitignore
 **/*.log

@@ -27,9 +27,16 @@ const PORT = Number(process.env.HANDOUT_TEST_PORT || 2571);
 const IAP_PORT = PORT + 1;
 const H = `http://127.0.0.1:${PORT}`;
 
-// Six addresses for six slots, in roster order: s1..s5 then jade.
+// Six addresses for six slots, in roster order.
 const STUDENTS = ["s1@test", "s2@test", "s3@test", "s4@test", "s5@test", "s6@test"];
-const STUDENTS_ENV = STUDENTS.map((e, i) => `${e}=${i < 5 ? `s${i + 1}` : "jade"}`).join(",");
+const STUDENTS_ENV = STUDENTS.map((e, i) => `${e}=s${i + 1}`).join(",");
+// Real deployments name every assigned address, and behind IAP a nameless one
+// refuses to boot. Naming them here is what makes the dashboard assertions
+// below test displayNameFor rather than the character placeholders it
+// replaced. "Fay Lin" is deliberately two words — the possessive in
+// MainRoom.roomPhrase used to only look at the first token.
+const NAMES = ["Ana", "Bo", "Cy", "Di", "Eve", "Fay Lin"];
+const ROSTER_ENV = STUDENTS.map((e, i) => `${e}:${NAMES[i]}`).join(",");
 const ADMIN = "prof@test";
 
 let pass = 0;
@@ -84,6 +91,7 @@ function startServer(port: number, env: Record<string, string>, dataDir?: string
       PORT: String(port),
       DATA_DIR: data,
       STUDENTS: STUDENTS_ENV,
+      ROSTER: ROSTER_ENV,
       ADMIN_EMAILS: ADMIN,
       DEV_USER: ADMIN,
       HANDOUT_SALT: "suite-salt",
@@ -505,7 +513,7 @@ async function main() {
   assert(!/class="name"/.test(blind), "…while showing none by default, so the writing is judged blind");
   // s5@test and s6@test have graded nothing; s1..s4 have.
   assert(
-    /Not answered at all:[\s\S]*?Grace/.test(blind) && /Not answered at all:[\s\S]*?Jade/.test(blind),
+    /Not answered at all:[\s\S]*?Eve/.test(blind) && /Not answered at all:[\s\S]*?Fay Lin/.test(blind),
     "…and names the students who have answered nothing — identity in the negative, attached to no opinion"
   );
   assert(
@@ -514,7 +522,7 @@ async function main() {
   );
   const named = await (await fetch(`${H}/admin/handouts/${six.handout_id}?names=1&as=${ADMIN}`)).text();
   assert(named.includes("Names are showing"), "?names=1 says so rather than changing quietly");
-  assert(/class="name">Sam</.test(named), "…and puts the roster name beside the grade");
+  assert(/class="name">Ana</.test(named), "…and puts the ROSTER name, not the character's, beside the grade");
 
   // ---- 11c. a changed salt fails loudly rather than orphaning the data ----
   console.log("\n11c. A changed salt stops, rather than silently orphaning a term of work");

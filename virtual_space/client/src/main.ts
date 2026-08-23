@@ -109,11 +109,13 @@ function roomInfoAt(x: number, y: number): RoomInfo | undefined {
   return named ?? init?.rooms.find((r) => r.kind === "commons");
 }
 
-// "the Library" but "Jade's Office" — see MainRoom.roomPhrase.
+// "the Library" but "Sam's Office" — see MainRoom.roomPhrase, which must
+// agree with this. Office labels carry real display names now, so the
+// possessive is not always on the first token.
 function roomPhrase(roomId: string | null): string {
   const label = init?.rooms.find((r) => r.id === roomId)?.label;
   if (!label) return "the world";
-  return /^\S+'s\s/.test(label) ? label : `the ${label}`;
+  return /'s\s/.test(label) ? label : `the ${label}`;
 }
 
 function labelFor(e: Entity): string {

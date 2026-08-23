@@ -29,7 +29,7 @@ import fs from "fs/promises";
 import path from "path";
 import { DATA_DIR } from "./paths";
 import type { Bundle, Generation } from "./handout-format";
-import { SLOTS, assignedStudents, slotFor } from "./roster";
+import { SLOTS, assignedStudents, displayNameFor, slotFor } from "./roster";
 
 export * from "./handout-format";
 
@@ -521,7 +521,7 @@ export async function summarise(bundle: Bundle, named = false): Promise<HandoutS
   const files = await listStudentFiles(bundle.handout_id);
   const sections: SectionSummary[] = [];
   const roster = assignedStudents();
-  const nameByHash = new Map(roster.map(({ slot, email }) => [studentHash(email), slot.name]));
+  const nameByHash = new Map(roster.map(({ email }) => [studentHash(email), displayNameFor(email)]));
 
   for (const s of bundle.sections) {
     const rows: SectionSummary["rows"] = [];
@@ -566,7 +566,9 @@ export async function summarise(bundle: Bundle, named = false): Promise<HandoutS
   sections.sort((a, b) => (a.mean ?? 99) - (b.mean ?? 99));
 
   const answered = new Set(files.filter((f) => Object.keys(f.records).length).map((f) => f.student_hash));
-  const notAnswered = roster.filter(({ email }) => !answered.has(studentHash(email))).map(({ slot }) => slot.name);
+  const notAnswered = roster
+    .filter(({ email }) => !answered.has(studentHash(email)))
+    .map(({ email }) => displayNameFor(email));
 
   return { bundle, cohort: roster.length, notAnswered, named, sections };
 }
