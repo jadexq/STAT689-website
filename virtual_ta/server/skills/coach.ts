@@ -10,7 +10,14 @@
 
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
-import { listReadings, loadReading, matchReading, passageBlock, searchMaterials } from "../materials.ts";
+import {
+  listReadings,
+  loadReading,
+  matchReading,
+  passageBlock,
+  searchMaterials,
+  searchWithin,
+} from "../materials.ts";
 import { loadAgenda, type AgendaRow } from "../agenda.ts";
 import { readQuestions, recordQuestion, writeDigest } from "../logger.ts";
 import type { Session } from "../session.ts";
@@ -148,19 +155,40 @@ ${list}`;
   // Collect the student's question for the instructor digest
   if (text.includes("?")) await recordQuestion(loaded.reading.id, text);
 
+  // A document too long to include whole is retrieved WITHIN instead of
+  // truncated. Truncation looked harmless at 3.7k and is not at 113k: it
+  // hands over the first quarter of the document, and because readingId is
+  // sticky it hands over the same first quarter for every later question in
+  // the conversation. The body below therefore says plainly which of the two
+  // it is, so the TA does not claim a section is absent when it was simply
+  // not retrieved.
+  let body = loaded.text;
+  let whole = true;
+  if (loaded.truncated) {
+    const inside = await searchWithin(loaded.reading.id, text);
+    if (inside.length) {
+      body = passageBlock(inside);
+      whole = false;
+    }
+  }
+
   const system = `${BASE_PERSONA}${board}
 
 You are answering a student's question about the course document "${loaded.reading.title}".
 Rules:
 - Answer directly and completely. Do not withhold the answer or turn it back into a question.
-- Ground the answer in the document below, and say where it comes from — quote or point to the part you used, so the student can go and read it.
-- If the document does not cover what they asked, say so plainly, then answer from general knowledge and label it as outside the course material. Never dress up general knowledge as something the document says.
+- Ground the answer in the ${whole ? "document" : "passages"} below, and say where it comes from — ${whole ? "quote or point to the part you used" : "name the section, e.g. the § heading on the passage"}, so the student can go and read it.
+- If ${whole ? "the document" : "these passages"} do not cover what they asked, say so plainly, then answer from general knowledge and label it as outside the course material. Never dress up general knowledge as something the document says.${
+    whole
+      ? ""
+      : "\n- These are the sections of a long document that matched the question, not the whole of it. If the answer is not here, say it was not in the sections you were given rather than that the document does not cover it."
+  }
 - Keep it to three or four sentences plus at most one small code snippet unless they ask for more.
 - Write plain conversational sentences, the way you would say it out loud. No headings, no bullet lists, no tables — this is rendered in a small chat bubble, not a document. Bold at most one phrase.
 
-THE DOCUMENT — "${loaded.reading.title}":
+${whole ? `THE DOCUMENT — "${loaded.reading.title}":` : `PASSAGES FROM "${loaded.reading.title}":`}
 ---
-${loaded.text}
+${body}
 ---`;
 
   const reply = await chatLLM(system, session.history, { maxTokens: 600, temperature: 0.7 });

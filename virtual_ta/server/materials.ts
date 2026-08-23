@@ -128,15 +128,20 @@ async function rawText(reading: Reading): Promise<string | null> {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
-export async function loadReading(id: string): Promise<{ reading: Reading; text: string } | null> {
+export async function loadReading(
+  id: string
+): Promise<{ reading: Reading; text: string; truncated: boolean } | null> {
   const reading = (await listReadings()).find((r) => r.id === id);
   if (!reading) return null;
   let text = await rawText(reading);
   if (text === null) return null;
-  if (text.length > MAX_READING_CHARS) {
-    text = text.slice(0, MAX_READING_CHARS) + "\n\n[…reading truncated for length…]";
-  }
-  return { reading, text };
+  // `truncated` is the caller's cue to retrieve within the document instead
+  // of accepting the first 28k. The first real reading is 113k, so this is
+  // the normal case, not the edge one — and the naming path is sticky, so a
+  // truncated answer poisons the rest of the conversation, not one turn.
+  const truncated = text.length > MAX_READING_CHARS;
+  if (truncated) text = text.slice(0, MAX_READING_CHARS) + "\n\n[…reading truncated for length…]";
+  return { reading, text, truncated };
 }
 
 // What the file is, for a consumer that has to decide how to present it.
@@ -204,13 +209,18 @@ export function stripHtml(html: string): string {
 const CHUNK_CHARS = 1_500;
 const CHUNK_OVERLAP = 200; // so an answer straddling a boundary is not halved
 const DEFAULT_CONTEXT_CHARS = 12_000;
-const MAX_CHUNKS_PER_DOC = 4; // one long document must not crowd out the rest
+// One long document must not crowd out the rest — but with a corpus this
+// small the opposite failure is the live one: every query was hitting this
+// cap against a single 113k reading and getting a quarter of the evidence it
+// could afford. Worth lowering again past roughly ten documents.
+const MAX_CHUNKS_PER_DOC = 8;
 
 export interface Passage {
   readingId: string;
   title: string;
   link?: string;
   part: number; // 1-based position of the chunk within its document
+  heading: string; // the heading trail this chunk sits under, "" if none
   text: string;
 }
 
@@ -229,6 +239,52 @@ function terms(text: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+}
+
+// Split a document at its headings, carrying the heading trail down. This is
+// what makes a passage self-describing: retrieval can then tell the TA the
+// answer came from "§ 5. Tooling › Choosing an agent" rather than just from
+// somewhere in a 113k document, and the student can go and find it.
+//
+// A document with no headings — an extracted PDF, a single markdown table —
+// comes back as one section with an empty trail, which is exactly the
+// behaviour this replaced.
+function sections(text: string, title = ""): { heading: string; text: string }[] {
+  // A document's own H1 is its title, which the passage label already
+  // carries. Left in, every heading trail would open by repeating it, and
+  // its words would score twice — once as title terms, once as heading terms.
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const isDocTitle = (x: string) => Boolean(title) && norm(x) === norm(title);
+
+  const out: { heading: string; text: string }[] = [];
+  const trail: string[] = [];
+  let buf: string[] = [];
+  let heading = "";
+  let inFence = false;
+
+  const flush = () => {
+    const t = buf.join("\n").trim();
+    if (t) out.push({ heading, text: t });
+    buf = [];
+  };
+
+  for (const line of text.split("\n")) {
+    // A shell comment inside a fenced block is not a heading, and the real
+    // readings are full of them.
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    const m = inFence ? null : /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!m) {
+      buf.push(line);
+      continue;
+    }
+    flush();
+    const level = m[1].length;
+    trail.length = Math.min(trail.length, level - 1);
+    trail[level - 1] = m[2].trim();
+    heading = trail.filter((h, i) => h && !(i === 0 && isDocTitle(h))).join(" › ");
+  }
+  flush();
+  return out;
 }
 
 // Split on blank lines and regroup into chunks, so a chunk boundary lands
@@ -261,6 +317,7 @@ function chunkText(text: string): string[] {
 interface Indexed extends Passage {
   tf: Map<string, number>;
   titleTerms: Set<string>;
+  headingTerms: Set<string>;
 }
 
 let index: { key: string; chunks: Indexed[]; df: Map<string, number> } | null = null;
@@ -287,17 +344,69 @@ async function buildIndex(): Promise<NonNullable<typeof index>> {
     const text = await rawText(r).catch(() => null);
     if (!text) continue;
     const titleTerms = new Set(terms(r.title));
-    chunkText(text).forEach((t, i) => {
-      const tf = new Map<string, number>();
-      for (const w of terms(t)) tf.set(w, (tf.get(w) ?? 0) + 1);
-      chunks.push({ readingId: r.id, title: r.title, link: r.link, part: i + 1, text: t, tf, titleTerms });
-    });
+    let part = 0;
+    for (const section of sections(text, r.title)) {
+      const headingTerms = new Set(terms(section.heading));
+      for (const t of chunkText(section.text)) {
+        const tf = new Map<string, number>();
+        for (const w of terms(t)) tf.set(w, (tf.get(w) ?? 0) + 1);
+        chunks.push({
+          readingId: r.id,
+          title: r.title,
+          link: r.link,
+          part: ++part,
+          heading: section.heading,
+          text: t,
+          tf,
+          titleTerms,
+          headingTerms,
+        });
+      }
+    }
   }
   const df = new Map<string, number>();
   for (const c of chunks) for (const w of c.tf.keys()) df.set(w, (df.get(w) ?? 0) + 1);
   index = { key, chunks, df };
   console.log(`[virtual-ta] indexed ${chunks.length} chunks from ${readings.length} document(s)`);
   return index;
+}
+
+function bare(c: Indexed): Passage {
+  return { readingId: c.readingId, title: c.title, link: c.link, part: c.part, heading: c.heading, text: c.text };
+}
+
+// idf is a property of the corpus, so N and df always come from the whole
+// index even when the candidate set is one document.
+function scoreAgainst(
+  candidates: Indexed[],
+  df: Map<string, number>,
+  N: number,
+  q: string[]
+): { c: Indexed; score: number }[] {
+  return candidates
+    .map((c) => {
+      let score = 0;
+      for (const w of q) {
+        const n = df.get(w);
+        if (!n) continue;
+        const idf = Math.log(1 + N / n);
+        const tf = c.tf.get(w) ?? 0;
+        // Saturating tf: the tenth occurrence of a word says little more than
+        // the second, and without this a long chunk wins on repetition alone.
+        if (tf) score += idf * (1 + Math.log(tf));
+        // A term in the document's TITLE is strong evidence about the
+        // document, so it lifts every chunk of it — that is how "the
+        // attention reading" pulls up passages that never repeat the word.
+        if (c.titleTerms.has(w)) score += idf * 0.75;
+        // A term in the section HEADING is the same argument one level down,
+        // and it is the reason chunking on headings improves retrieval and
+        // not just citation: "what does it say about MCP" now finds the
+        // section called MCP even where the body says "the protocol".
+        if (c.headingTerms.has(w)) score += idf * 0.5;
+      }
+      return { c, score };
+    })
+    .sort((a, b) => b.score - a.score);
 }
 
 // The most relevant passages across every course document, best first, up to
@@ -311,47 +420,61 @@ export async function searchMaterials(
   if (!chunks.length) return [];
   const q = [...new Set(terms(query))];
   if (!q.length) return [];
-  const N = chunks.length;
 
-  const scored = chunks.map((c) => {
-    let score = 0;
-    for (const w of q) {
-      const n = df.get(w);
-      if (!n) continue;
-      const idf = Math.log(1 + N / n);
-      const tf = c.tf.get(w) ?? 0;
-      // Saturating tf: the tenth occurrence of a word says little more than
-      // the second, and without this a long chunk wins on repetition alone.
-      if (tf) score += idf * (1 + Math.log(tf));
-      // A term in the document's TITLE is strong evidence about the document,
-      // so it lifts every chunk of it — that is how "the attention reading"
-      // pulls up passages that never repeat the word.
-      if (c.titleTerms.has(w)) score += idf * 0.75;
-    }
-    return { c, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
   const out: Passage[] = [];
   const perDoc = new Map<string, number>();
   let used = 0;
-  for (const { c, score } of scored) {
+  for (const { c, score } of scoreAgainst(chunks, df, chunks.length, q)) {
     if (score <= 0) break;
     const n = perDoc.get(c.readingId) ?? 0;
     if (n >= MAX_CHUNKS_PER_DOC) continue;
     if (used + c.text.length > budgetChars) continue;
     perDoc.set(c.readingId, n + 1);
     used += c.text.length;
-    out.push({ readingId: c.readingId, title: c.title, link: c.link, part: c.part, text: c.text });
+    out.push(bare(c));
   }
   return out;
+}
+
+// Retrieval INSIDE one document, for when the student has named a reading too
+// long to include whole.
+//
+// The alternative — the first 28k characters — was measured against the first
+// real reading and is worse than it looks: 25% of the document, with the
+// section the student asked about outside the slice, and session.readingId is
+// sticky, so every later question in that conversation is answered from the
+// same first quarter. Passages come back in document order, because an
+// excerpt that jumps around reads like a different document.
+export async function searchWithin(
+  readingId: string,
+  query: string,
+  budgetChars = MAX_READING_CHARS
+): Promise<Passage[]> {
+  const { chunks, df } = await buildIndex();
+  const mine = chunks.filter((c) => c.readingId === readingId);
+  if (!mine.length) return [];
+  const q = [...new Set(terms(query))];
+  if (!q.length) return [];
+
+  const picked: Indexed[] = [];
+  let used = 0;
+  for (const { c, score } of scoreAgainst(mine, df, chunks.length, q)) {
+    if (score <= 0) break;
+    if (used + c.text.length > budgetChars) continue;
+    used += c.text.length;
+    picked.push(c);
+  }
+  return picked.sort((a, b) => a.part - b.part).map(bare);
 }
 
 // The passages laid out for a prompt, each labelled with the document it
 // came from so the TA can name its source instead of implying one.
 export function passageBlock(passages: Passage[]): string {
   return passages
-    .map((p) => `--- from "${p.title}" (part ${p.part})${p.link ? ` · ${p.link}` : ""} ---\n${p.text}`)
+    .map((p) => {
+      const where = p.heading ? `§ ${p.heading}` : `part ${p.part}`;
+      return `--- from "${p.title}", ${where}${p.link ? ` · ${p.link}` : ""} ---\n${p.text}`;
+    })
     .join("\n\n");
 }
 
