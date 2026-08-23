@@ -6,6 +6,13 @@
 // default is jade@local, who is on the admin allowlist and therefore has
 // no avatar at all (server/identity.ts). This suite is entirely about
 // avatars, so it must run as an ordinary student.
+//
+// It deliberately does NOT assert a total entity count. That total was
+// hardcoded to 12 and observed as 7, 9, 10 and 12: an ungraceful
+// disconnect holds a seat for RECONNECT_WINDOW_S (120s), so a re-run
+// inside that window legitimately starts with extra avatars. Those are
+// seats inside their reconnection window, not ghosts — failing on them
+// asserts something untrue. What IS invariant is asserted instead.
 import { Client } from "colyseus.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,9 +44,24 @@ async function main() {
   await wait(800);
 
   const anas = world.entities.filter((e: any) => e.name === "Ana");
-  console.log(`entities: ${world.entities.length}, Ana avatars: ${anas.length}, at (${anas[0]?.x},${anas[0]?.y})`);
+  const agents = world.entities.filter((e: any) => e.kind === "agent");
+  const humans = world.entities.filter((e: any) => e.kind === "human");
+  console.log(
+    `entities: ${world.entities.length} (${agents.length} agents, ${humans.length} humans), ` +
+      `Ana avatars: ${anas.length}, at (${anas[0]?.x},${anas[0]?.y})`
+  );
+
+  // The ghost assertion proper: the rejoin replaced the stale avatar.
   if (anas.length !== 1) throw new Error(`expected exactly 1 Ana, got ${anas.length}`);
-  if (world.entities.length !== 12) throw new Error(`expected 12 entities, got ${world.entities.length}`);
+
+  // The cast is fixed even though the human count is not.
+  if (agents.length !== 6)
+    throw new Error(`expected 6 agents (5 virtual students + Terra), got ${agents.length}`);
+
+  // Generalises the check above: nobody may appear twice, under any name.
+  const names = humans.map((e: any) => e.name);
+  const dupes = [...new Set(names)].filter((n) => names.filter((m) => m === n).length > 1);
+  if (dupes.length) throw new Error(`duplicated human avatars: ${dupes.join(", ")}`);
   console.log("GHOST TEST PASSED ✅ — rejoin replaced the stale avatar");
   await second.leave();
   process.exit(0);

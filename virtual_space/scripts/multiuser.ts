@@ -49,6 +49,32 @@ async function waitUntil(cond: () => boolean, timeoutMs: number, label: string) 
   throw new Error(`TIMEOUT waiting for: ${label}`);
 }
 
+// Terra DROPS a message sent while she is busy: MainRoom.scheduleReplies
+// filters busy agents out of the reply set and agentRespond returns early.
+// That is deliberate, but it means a caller must RETRY — and it is why this
+// suite used to fail whenever it ran after smoke/integration, which leave
+// Terra mid-LLM-call. Waiting longer cannot help: nothing is in flight to
+// wait for. So speak, give her a while, and speak again if nothing came back.
+async function sayUntilAnswered(j: Joined, text: string, who: string, budgetMs = 180_000) {
+  const mark = j.chats.length;
+  const heard = () => j.chats.slice(mark).some((c) => c.from === "Terra");
+  const deadline = Date.now() + budgetMs;
+  let attempts = 0;
+  while (!heard() && Date.now() < deadline) {
+    attempts++;
+    j.room.send("chat", { text });
+    const until = Date.now() + 25_000;
+    while (!heard() && Date.now() < until) await wait(500);
+  }
+  if (!heard()) {
+    throw new Error(
+      `TIMEOUT: Terra never answered ${who} across ${attempts} attempt(s) in ${budgetMs / 1000}s — ` +
+        `she may be stuck busy rather than merely slow`
+    );
+  }
+  console.log(`  ✓ Terra answered ${who}${attempts > 1 ? ` (took ${attempts} attempts — she was busy)` : ""}`);
+}
+
 // The TA brain's filename transform for a session id.
 const logFileFor = (sessionId: string) =>
   path.join(TA_LOGS, `${sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)}.jsonl`);
@@ -155,20 +181,35 @@ async function main() {
     return !!e && e.x >= ta.x1 && e.x <= ta.x2 && e.y >= ta.y1 && e.y <= ta.y2;
   };
 
+  // Terra's position PERSISTS between suites and nothing returns her home.
+  // Her home is office-ta, but smoke and integration walk her elsewhere, and
+  // a suite that dies mid-way leaves her wherever it stopped. Since
+  // scheduleReplies only picks agents whose room matches the speaker's, a
+  // Terra standing in someone else's office never answers — no matter how
+  // long you wait or how often you retry. THAT is what made this suite
+  // order-dependent. So put her where this test needs her instead of hoping.
+  const terraHome = () => {
+    const t = ana.world.find((e) => e.id === "agent-terra");
+    return !!t && t.x >= ta.x1 && t.x <= ta.x2 && t.y >= ta.y1 && t.y <= ta.y2;
+  };
+  const placeBy = Date.now() + 90_000;
+  while (!terraHome() && Date.now() < placeBy) {
+    // Refused while she is busy, hence the retry rather than a single send.
+    jade.room.send("admin", { action: "send", agent: "ta", dest: "office-ta" });
+    const until = Date.now() + 8_000;
+    while (!terraHome() && Date.now() < until) await wait(300);
+  }
+  assert(terraHome(), "Terra is in the TA office (put there by this suite, not assumed)");
+
   ana.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(ana), 30000, "Ana reached the TA office");
-  const benMark = ana.chats.length;
-  ana.room.send("chat", { text: "Hi Terra, this is Ana." });
-  await waitUntil(
-    () => ana.chats.slice(benMark).some((c) => c.from === "Terra"),
-    180000,
-    "Terra answered Ana (and is free again)"
-  );
+  await sayUntilAnswered(ana, "Hi Terra, this is Ana.", "Ana");
   assert(fs.existsSync(files[0]), "Ana has a conversation file of their own");
 
   omar.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(omar), 30000, "Omar reached the TA office");
-  omar.room.send("chat", { text: "Hi Terra, this is Omar." });
+  // Omar retries for the same reason: Terra may still be finishing Ana.
+  await sayUntilAnswered(omar, "Hi Terra, this is Omar.", "Omar");
   await waitUntil(() => fs.existsSync(files[1]), 60000, "Omar has a conversation file of their own");
 
   const anaLog = fs.readFileSync(files[0], "utf8");
