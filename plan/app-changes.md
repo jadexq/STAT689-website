@@ -122,10 +122,20 @@ discover on day one that they cannot read their own noticeboard.
 | # | Commit | What changes | Files |
 |---|---|---|---|
 | 2a | **The space proxies the corpus** | `GET /api/materials` (list, forwarded to `TA_BASE_URL`) and `GET /api/materials/:id/file` (bytes). The browser cannot reach the TA; this is the bridge. Path traversal is already refused inside `materials.ts`, and `:id` is looked up in the manifest rather than joined onto a path, so the proxy adds no new file-system surface. | `virtual_space/server/index.ts` |
-| 2b | **The Library board becomes the materials shelf** | Rendered from the proxied list — title, one line, a link the space serves — rather than from hand-typed posts. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in the same step. That single-source property is the entire reason for 2a. | `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
+| 2b | **The Library board becomes the materials shelf, and `.md` is rendered on the way out** | Cards from the proxied list — title, one line, a link the space serves. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in one step; that single-source property is the entire reason for 2a. **The file route renders `.md` to HTML before serving it**, because markdown is the best format for the TA and the worst for a student who clicks it — a browser shows raw text or offers a download. Rendering **server-side** keeps it off a client bundle that is already ~1.2 MB. `.html` and `.pdf` are passed through untouched. | `virtual_space/server/index.ts`, `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
 | 2c | **`agenda.md`, with a table convention** | The agenda is *not* a PDF, and after review it is **not JSON either** — it is a markdown table, one row per week: `Week | Date | Topic | Read | Due`. Markdown because an agenda that is annoying to edit is an agenda that goes stale, and stale is the one failure mode that matters. The server parses the table best-effort for the schedule rendering; **if a row does not parse it is rendered verbatim rather than dropped**, so a stray `|` degrades the display instead of silently losing a week. | `virtual_ta/materials/agenda.md`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
 | 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Markdown makes this side nearly free: the TA already ingests `.md` from `materials/`, so the agenda is a manifest entry and a pinned-context flag rather than a JSON-to-text generator. Always included rather than retrieved — it is the one document where retrieval missing it yields a *confidently wrong* answer about a deadline instead of a vague one. | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
 | 2e | **Upload without a redeploy** *(droppable)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
+
+**On formats.** All three are already supported (`materials.ts` branches on extension: `unpdf` for
+PDF, `stripHtml` for HTML, read-as-is otherwise). The house preference is **`.md` for readings**:
+no extraction step, so nothing is lost, and it is what the ~1,500-character chunking was tuned
+against. `.html` when the rendering *is* the point — layout, images, MathJax, anything
+interactive — written by hand rather than exported; a Google Docs HTML export is mostly
+`<span class="c17">` wrappers that survive tag-stripping as whitespace noise, and `stripHtml`
+strips `<script>`/`<style>` but not nav or footers, so a saved web page brings its chrome into
+the index. `.pdf` only for papers that cannot be re-authored: extraction is the lossiest path,
+and multi-column layouts interleave.
 
 **On 2e:** it is the difference between "adding a reading is a git commit and a deploy" and
 "adding a reading is a drag and drop". Worth having before the semester, not necessarily before
@@ -161,7 +171,7 @@ still holds — the first four suites run against a fresh server, in order.
 | `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
 | `integration` | board count 2 → 8; the announcement→TA leg from 1e |
 | `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
-| `materials-test` | agenda indexed and retrievable; a malformed table row still renders; README present after 3b |
+| `materials-test` | agenda indexed and retrievable; a malformed table row still renders; one reading of each format (`.md`, `.html`, `.pdf`) extracts to sane text; README present after 3b |
 | `idle-test` | unchanged |
 
 ### Held back — feature 4 (handouts with saved answers)
