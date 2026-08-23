@@ -147,6 +147,11 @@ export function identify(req: IncomingMessage): Identity
 - `isAdmin` = email ∈ `ADMIN_EMAILS` (comma-separated env var).
 - Display name from a small `ROSTER` map (email → "Sam"), falling back to the email's
   local part. Keeps avatar labels readable.
+- **Added 2026-08-22:** an address is also mapped to a *student character* — an office and a
+  name — by `STUDENTS` (`virtual_space/server/roster.ts`). Precedence for the display name is
+  `ROSTER` → the character they took over → a guess from the address. An address with no
+  character still gets in, but lands in the Common Area. See **D5b**: this is a second thing
+  every account needs, separate from the IAP grant.
 
 **`virtual_space/server/rooms/MainRoom.ts`**
 
@@ -207,6 +212,17 @@ without a manual reload.
 One `.env.example` documenting: `TRUST_IAP_HEADER`, `DEV_USER`, `ADMIN_EMAILS`, `ROSTER`,
 `PORT`, `TA_BASE_URL`, `DATA_DIR`, `OLLAMA_API_KEY`. `DATA_DIR` is new — it lets `data/` and
 `output/` point at the GCS mount in prod and stay local in dev.
+
+**Added 2026-08-22:** `IAP_JWT_AUDIENCE`, `SNAPSHOT_URI`, `STUDENTS` (which student character
+each address controls — see **D5b**), and the idle windows `SOLO_WARN_S`, `SOLO_IDLE_S`,
+`HOME_IDLE_S`. `virtual_space/.env.example` is the current list; this paragraph is not.
+
+**One trap worth knowing:** `.env` is loaded by `server/env.ts`, which **must stay the first
+import** of the process. It was a `dotenv.config()` call partway down `index.ts` until
+2026-08-22, and because ES imports are hoisted, every module reading `process.env` at module
+scope had already run — so `.env` was silently ignored for exactly the settings that are read
+once at startup. It never affected the cloud, where Cloud Run sets real environment variables,
+which is why it survived this long.
 
 ### A6 · Container
 
@@ -435,14 +451,27 @@ which is a new revision; the IAP binding is not.
 
 ## 7. Testing
 
-| Test | Covers |
-|---|---|
-| `scripts/smoke.ts` (existing) | core loop — must keep passing |
-| `scripts/integration.ts` (existing) | TA↔space wiring, room modes |
-| `scripts/multiuser.ts` (**new**) | two identities coexist; admin gating; separate TA sessions |
-| Restart-memory check (**new**) | A3 rehydration |
-| Container smoke | A6 |
-| Post-deploy manual | IAP login, one student, one full chat, board post |
+Written 2026-08-20 as a plan; **rewritten 2026-08-22** to list what actually exists. All paths
+are relative to `virtual_space/` unless stated.
+
+| Suite | Covers | Run it with |
+|---|---|---|
+| `scripts/smoke.ts` | core loop — movement, same-room isolation, walking in to the TA, a typed board post reaching a student | `npx tsx scripts/smoke.ts` |
+| `scripts/integration.ts` | TA↔space wiring; nobody can be moved; sealed rooms; speak-as-TA; directing a stand-in | as above |
+| `scripts/multiuser.ts` | two identities coexist; admin is granted not claimed; the 1:1 door; separate TA sessions | as above |
+| `scripts/ghost-test.ts` | a rejoin replaces a stale avatar rather than adding one | as above |
+| `scripts/idle-test.ts` | the TA office frees on silence; idling anywhere else walks you home | **needs short windows on the SERVER**: `SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=12 npm run dev` |
+| `../virtual_ta/scripts/materials-test.ts` | the material index and passage search | `npx tsx scripts/materials-test.ts` — no LLM, no server |
+| Container smoke | A6 | |
+| Post-deploy manual | IAP login, one student, one full chat, one board post | §6 stage 4 |
+
+**Run the first four against a FRESH space server, in that order.** Agent and avatar state
+persists for the life of the process, and a suite that only passes in one order will eventually
+be believed when it should not be (`open-issues.md` A2, E5).
+
+**The two env-tunable ones are deliberately outside the default run.** Their real windows are
+minutes long, and a test that sleeps for minutes gets skipped — which is worse than not having
+it. Better an honest opt-in than a suite everyone learns to interrupt.
 
 ---
 

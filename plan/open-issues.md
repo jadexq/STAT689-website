@@ -72,9 +72,14 @@ and what the diagnosis got wrong twice. **A3 was dissolved rather than diagnosed
   was talking to an empty room. **No timeout and no retry count could ever have fixed that**,
   which is the useful lesson: a wait that cannot succeed looks exactly like a wait that is too
   short.
-- **Fix:** the suite now *places* Terra in the TA office via its own admin connection and waits
-  for her to arrive, retrying the send because it is refused while she is busy. It no longer
-  assumes where she is.
+- **Fix:** the suite *placed* Terra in the TA office via its own admin connection and waited for
+  her to arrive, retrying the send because it was refused while she was busy. It no longer
+  assumed where she was.
+- **Superseded 2026-08-22 (`3788935`).** That placement block is gone, along with the whole
+  `admin send` action: no character can move any more, so there is no position to place. The
+  cause described above cannot recur for the TA. It **did** recur for the five stand-ins the
+  same day — see **E5** — which is the part worth remembering: the fix here narrowed the bug to
+  the agents that could still move rather than removing it, and a narrowed bug still fires.
 - **Why it matters anyway:** a suite that only passes in one order will eventually be believed
   when it shouldn't be, and it masked whether the auth change had broken something. It cost real
   time today to prove it hadn't.
@@ -422,14 +427,17 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   post anything to the Library board. Everything else seemed fine.
 - **Not yet reproduced or diagnosed.** What follows is where to start, not a cause. Do not treat
   any of it as established.
-- **The moving parts:**
-  - `virtual_space/server/map.ts:53` — `library` is `kind: "special"` with `hasBoard: true` and
-    `forcedSkill: "announce"`. So posting is meant to run through the `announce` skill, not
-    ordinary chat.
+- **The moving parts** — ⚠ **as they were on 2026-08-22, before `7845269`. Two of these
+  references no longer exist**; kept because they describe the code the symptom was reported
+  against, which is what a re-diagnosis would need:
+  - `virtual_space/server/map.ts:53` — `library` was `kind: "special"` with `hasBoard: true` and
+    `forcedSkill: "announce"`, so posting ran through the `announce` skill rather than ordinary
+    chat. **`forcedSkill` no longer exists anywhere**; the room keeps only `hasBoard`.
   - `virtual_space/server/boards.ts` — board storage, capped at `MAX_ITEMS = 50`, persisted to
     `DATA_DIR/boards.json`.
-  - `virtual_space/server/rooms/MainRoom.ts:418` — falls back to `"library"` when the TA's
-    current room has no board.
+  - `virtual_space/server/rooms/MainRoom.ts:418` — fell back to `"library"` when the TA's
+    current room had no board. **Gone with the `compose` action**; the instructor now picks the
+    board explicitly, so there is nothing left to guess.
   - `virtual_space/client/src/main.ts:305` — client-side branch on `r.id === "library"`.
 - **Two questions worth answering before touching code:** does it fail the same way locally, and
   does it fail for the admin as well as for a student? The board is written by the TA *on the

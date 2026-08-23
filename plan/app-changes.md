@@ -171,6 +171,8 @@ the lever is the idle timeout, not the door.
 | `82fff27` | Idle warn at 4 min, walk home at 5, windows env-tunable |
 | `ea9bb22` | Render the TA's bold/code/links in the chat bubble instead of showing the markers |
 | `3ee84f6` | Chunked keyword retrieval over the materials; sources reported as a chip |
+| `cf8bdb4` | The TA office is 1:1 including agents — see the first addendum below |
+| `3788935` | Six student characters, one office each; `send` removed; `.env` load order — see the second addendum |
 
 **Two of those were not in the plan.** Both were found by watching the thing work rather than by
 reasoning about it, which is the argument for running it before calling it done:
