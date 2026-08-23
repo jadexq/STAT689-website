@@ -33,6 +33,129 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ---
 
+## 2026-08-23 · A person's name, everywhere the character's placeholder shows
+
+**Status:** **planned, not built.** Blocks the redeploy — see
+[`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15, which depends on it.
+
+### What prompted it
+
+A second test account is being added, so for the first time two slots belong to real people
+rather than to AI stand-ins. Writing the deploy config surfaced two things at once: the
+instructor misread their own `STUDENTS` variable, and the name a real person is given only
+reaches one of the four places it is displayed.
+
+### A slot is a character, and the character's name is a placeholder
+
+`roster.ts` already says it: six slots, each an office and a character, played by an AI
+stand-in until a real address is assigned to it. The placeholder names exist so that a real
+student **takes a character over** rather than arriving beside it.
+
+That half works. The other half does not: `ROSTER` renames the avatar and nothing else.
+
+| Surface | Reads from | Correct today |
+|---|---|---|
+| Avatar label in the world | `ROSTER` → slot name → email | yes |
+| Office label on the map | hardcoded string, `map.ts` | **no** |
+| Handout dashboard, incl. `?names=1` | `slot.name`, `handouts.ts` | **no** |
+| `Roster:` startup line | `slot.name`, `rosterSummary()` | **no** |
+
+So a real person assigned to a slot gets their own name on their avatar while standing in an
+office labelled after a character who no longer exists, and the instructor's handout dashboard
+lists their responses under that character's name. The office is the worse of the two — the
+stand-in is *gone*, so the label names nobody at all.
+
+**The office must follow whoever holds the slot.** That is not a preference; it is what the
+stand-in design already implies, and only the avatar half was implemented.
+
+### Why the names cannot simply be edited into `roster.ts`
+
+Because they are real people's names, and this file and that one are both tracked:
+
+> Addresses live in the environment, never in this file. This file is tracked in git and
+> student addresses are not ours to publish. — `roster.ts`
+
+Editing a display name into `SLOTS` would put a real person's name into git history, which
+outlives the decision to keep the repo private. So the fix has to make `ROSTER` genuinely
+load-bearing rather than route around it. That also means **`ROSTER` becomes required** for any
+assigned slot, which the last change below enforces.
+
+### Six changes
+
+1. **`ROSTER` parsing moves from `identity.ts` into `roster.ts`,** which exports
+   `displayNameFor(email)`. `identity.ts` already imports `roster.ts`, so the reverse would be a
+   cycle — and `roster.ts` is where the slot fallback lives anyway, so the whole precedence chain
+   (`ROSTER` → slot placeholder → name guessed from the address) ends up in one function.
+
+2. **Office labels are patched at boot,** in `roster.ts`, for every slot with an assigned
+   address. `ROOMS` is handed to the client wholesale and `roomById().label` feeds eight prose
+   sites, so patching the one array covers every consumer for free. Doing it in `map.ts` instead
+   would invert the import and create the cycle.
+
+3. **`handouts.ts` and `rosterSummary()` go through `displayNameFor`** rather than reading
+   `slot.name` directly.
+
+4. **Slot id `jade` → `s6`, and room id `office-jade` → `office-s6`.** Every other slot id is an
+   opaque handle; this one looked like a name, so `STUDENTS=<address>=jade` read as *"call this
+   person jade"* when it means *"give this person that office"*. The instructor read it that way,
+   which is enough evidence. Uniform ids make the format self-explaining. No data migration —
+   `boards.json` keys on `library` and `announcements`, and session logs are historical records.
+
+5. **Behind IAP, an assigned slot with no `ROSTER` name is a boot failure.** Once `ROSTER` drives
+   four surfaces, a missing entry silently labels a real person with a character's name — the
+   same shape as `open-issues.md` **D5b**, which already costs an afternoon. `roster.ts` throws at
+   boot on an unknown slot id and on a duplicate slot; this is the third check in that idiom.
+   Locally it warns instead, matching how `HANDOUT_SALT` and `ADMIN_EMAILS` are strict behind IAP
+   and forgiving on a laptop — otherwise every suite would need a `ROSTER`.
+
+6. **The possessive test in `MainRoom.ts` is broadened from `/^\S+'s\s/` to `/'s\s/`.** It picks
+   between "Sam's Office door is shut" and "*the* Library door is shut" by looking for a
+   possessive on the **first** token, so any two-word display name produces "the X Y's Office door
+   is shut". The test account's name was going to trigger it immediately. "the Library" and "the
+   Computer Lab" still come out right.
+
+### One bug this uncovered, which is not new
+
+**E6 is only three-quarters fixed.** Filed as **E8** rather than reopened, so the resolved
+record of what E6 was stays intact. `MainRoom.ts:392` still walks an idle
+occupant of the TA office home to a hardcoded `roomById("office-jade")`; lines 185, 240 and 414
+were all converted to `homeRoomFor(email)` and this one was missed. E6's own text predicted the
+symptom — "the new idle timer would have returned all five students to the same tile" — and on
+this path it is still true. It is invisible while exactly one account holds a slot, and the
+second test account makes it reachable. One line, same pattern as 414.
+
+### Consequences to accept
+
+- **Display names should be short, by convention rather than by enforcement.** An office is 6×6
+  tiles and the label is drawn inside it. A full "Firstname Lastname's Office" will not fit
+  comfortably. A first name or a short handle is the intent; nothing checks it.
+- **Renaming a slot mid-semester leaves older prose inconsistent** in the session logs. Acceptable:
+  `logEvent` records room *ids*, so only conversational text is affected, and that text is a
+  point-in-time record anyway.
+- **An office belongs to its assignee whether or not they are online.** Consistent with the
+  existing rule that an absent occupant's office is empty rather than staffed by an impostor.
+
+### Verification
+
+- Two accounts assigned to two slots, with `ROSTER` names: each avatar, each office label, the
+  `Roster:` startup line, and the handout dashboard under `?names=1` all show the same name.
+- A slot assigned with no `ROSTER` entry: boots with a warning locally, refuses to boot with
+  `TRUST_IAP_HEADER=1`.
+- Walking into a shut TA office reports the occupant's office correctly for a two-word name.
+- Idling out of the TA office returns the occupant to **their own** office, not `s6`'s (E8).
+- `smoke.ts` and `integration.ts` pass — both are likely to assert on the old hardcoded label and
+  will need updating; that is expected, not a surprise.
+- `handout-test.ts` still passes with its six-address roster; its `STUDENTS` builder references
+  the old `jade` slot id and moves to `s6`.
+
+### Not in scope
+
+- **How many slots real students get.** Six exist; if the two test accounts keep two of them,
+  four are left. Deferred by the instructor until the class list is final — tracked as
+  `open-issues.md` **D12** so it does not drift past.
+- **Naming the offices anything other than after their occupant.** Considered and rejected above.
+
+
 ## 2026-08-23 · Feedback handouts — per-student versions, per-section judgement
 
 **Status:** **shipped 2026-08-23**, verified locally — `b87a6e2` (4a), `ba1c2fe` (4b), `afe0666`

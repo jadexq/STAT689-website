@@ -1,7 +1,8 @@
 # STAT 689 — Google Cloud deployment plan
 
 **Status:** approved 2026-08-20 · **Phase A built and verified** · **Phase B complete
-2026-08-22** · **Phase C deployed and verified 2026-08-22**
+2026-08-22** · **Phase C deployed and verified 2026-08-22** · **redeploy drafted 2026-08-23
+(§15), not executed — what is live is 61 commits behind**
 
 > **Status lives in [`open-issues.md`](./open-issues.md), not here.** This line is a coarse
 > marker only. It read "Phase C not started" for several hours *after* Phase C was deployed —
@@ -255,6 +256,17 @@ Two things I will not guess at. A hello-world Cloud Run service, no app code:
 ---
 
 ## 6. Phase C — deploy (runbook, rewritten 2026-08-22)
+
+> ### ⚠ Superseded on one point, 2026-08-23 — the roster variables below are wrong
+>
+> Stage 2, stage 3 and stage 4 step 4b name **`jadewang@gmail.com`** as the test-student account.
+> That address has no IAP grant and is not used. It was also never deployed: the live service was
+> brought up with no `STUDENTS` variable at all, so these lines are a stale instruction rather than
+> a record of what happened.
+>
+> The correct pair — `STUDENTS` **and** `ROSTER`, for two real test accounts — is in **§15h**.
+> Left in place rather than edited out because `open-issues.md` D5b quotes this history, and
+> because rewriting a runbook in place is what D3 records going wrong. Read §15h instead.
 
 The original §6 was written before the Phase B spike and every one of its seven steps was
 stale — the FUSE mount it deploys was abandoned, three of its APIs and both its setup steps
@@ -1406,3 +1418,328 @@ look but not entangled with this one.
 **Verification after the change:** deploy, then confirm in the logs that the first
 `[sync] flushed (changed)` appears *and* that a second one appears after a later change —
 one flush proves the token works, two prove the overwrite permission does.
+
+---
+
+## 15. Redeploy — the 61-commit catch-up (2026-08-23)
+
+**Drafted 2026-08-23, revised the same day after review. Not executed.** Per-item status lives
+in [`open-issues.md`](./open-issues.md); this section owns the reasoning and the order.
+
+§6 is the runbook for the *first* deploy — a service that did not exist, an empty bucket, an
+OAuth client that had never been attached. None of those preconditions hold now, so this is a
+new section rather than an edit to that one. §6 stays as the record of what Phase C was, which
+is D3's lesson: a runbook rewritten in place stops being a record of anything.
+
+> **Two accounts, and only one of them may be named here.** `jadewang@tamu.edu` is the
+> instructor's own address and appears throughout this file already. The **second test account**
+> belongs to somebody else, so per this file's header its address and display name are *not*
+> written down here — they are passed straight to `gcloud` and kept with the other local
+> configuration. Below it is `<test-2>` and `<Test2Name>`.
+
+### 15a. What is actually running
+
+Read off the live service on 2026-08-23, not from memory:
+
+| | |
+|---|---|
+| revision | `stat689-00002-c5j`, serving 100% |
+| image | `…/stat689@sha256:d22ac74…`, built **2026-08-22 23:16 UTC** |
+| revision 2 | created 23:52 UTC with the **same image digest** — an env change, not a rebuild |
+| runtime SA | `stat689-app@…` ✓ (§14m applied) |
+| shape | `maxScale=1`, `timeout=3600`, `memory=1Gi`, `cpu-throttling=false`, `startup-cpu-boost=true` ✓ |
+| IAP grants | `roles/iap.httpsResourceAccessor` on all three accounts ✓ (`<test-2>` granted 2026-08-23) |
+| env present | `TRUST_IAP_HEADER`, `IAP_JWT_AUDIENCE`, `ADMIN_EMAILS`, `SNAPSHOT_URI`, the four LLM vars, `OLLAMA_API_KEY` from Secret Manager |
+| env **absent** | **`STUDENTS`**, **`ROSTER`**, **`HANDOUT_SALT`** |
+
+The infrastructure is right and both existing accounts can already sign in. The *code* is the
+working tree at about `b693564` —
+
+**61 commits and 6,488 lines of application code ago** (66 files under `virtual_space/`,
+`virtual_ta/`, `Dockerfile` and `docker/`, including nine new server modules).
+
+Everything from steps 1–4 is absent from production: announcements and boards, the Library shelf
+and the course corpus, the Computer Lab repo cards, the entire handout system, the TA
+simplification, and the six student characters.
+
+**The missing env vars are not cosmetic**, and both are already tracked:
+
+- no `STUDENTS` → every account that signs in lands in the Common Area. That is **D5b**'s quiet
+  failure, sitting in production right now. Since step 4 it is no longer quiet: such an account
+  is also refused every handout with a 403.
+- no `HANDOUT_SALT` → every handout route answers 503. That is **D8**, and it is the fail-closed
+  design working correctly rather than a bug.
+
+### 15b. Why redeploy now, rather than when the first handout is ready
+
+Not "it has been a while". Three of the new things are **container-shaped risks that the local
+suites structurally cannot catch**, and two of the three fail quietly:
+
+1. **`/katex` is served out of `node_modules/katex/dist`.** That path has to survive
+   `npm prune --omit=dev` in the build stage. `katex` is in `dependencies`, so it should — but a
+   pruned image is the only place that is ever actually tested. If it does not survive, every
+   formula in every handout renders as raw `$…$`, nothing throws, and the first person to notice
+   is a student.
+2. **`handout-format.ts` exists only to keep `yaml` and `roster.ts` out of the server's import
+   graph.** `yaml` is a devDependency, so a pruned image is likewise the only enforcement of that
+   split. This one at least fails loudly: the container dies at boot.
+3. **Bundle upload is a large JSON POST through IAP.** The body-parser ordering — a larger limit
+   registered on the path *before* the global `express.json()`, because the first parser to touch
+   a request sets `req._body` and every later one returns early — was worked out against a dev
+   server with no proxy in front of it.
+
+Then the ordinary argument: 6,488 lines is the largest untested delta this project has carried,
+and the cost of bisecting a container failure scales with it. Two smaller reasons to go now
+rather than later — **D7**'s safe window for wiping the bucket is still open and closes the first
+time a student uses the space, and the salt has to be set at deploy time regardless, so doing it
+while no handout data exists anywhere is free.
+
+### 15c. Stage 1 — the app change the deploy depends on
+
+**Do this first, not after the container build.** Stage 2 changes `package.json`, and Stage 3
+builds the image that Stage 5 ships; validating an image and then editing its inputs would mean
+deploying something nobody looked at.
+
+Two real accounts now hold two slots, and the name a person is given reaches only one of the four
+places it is shown. Design, rationale and verification are in
+[`app-changes.md`](./app-changes.md), 2026-08-23, "A person's name, everywhere the character's
+placeholder shows". In summary: `ROSTER` becomes load-bearing and drives the office label, the
+handout dashboard and the startup line as well as the avatar; slot `jade` is renamed `s6` so
+every slot id is an opaque handle; a slot assigned without a `ROSTER` name refuses to boot behind
+IAP; and the possessive test in `MainRoom.ts` is broadened so a two-word name does not produce
+"the X Y's Office door is shut".
+
+It also carries **E8** — `MainRoom.ts:392` still hardcodes `roomById("office-jade")` as the home
+of an idle TA-office occupant. That is the one call site E6's fix missed, filed separately so E6's
+resolved record stays intact, and the second test account is the first thing to make it reachable.
+
+### 15d. Stage 2 — three repo fixes, all found while reading the deploy path
+
+None of them change application behaviour. One commit, so that the image and the runbook agree.
+
+**1. `test_material/` is missing from `.gcloudignore` — open issue D10.** That file's own
+header says it *replaces* gcloud's inference from `.gitignore`, so "the list below must be
+complete" — and `test_material/` is gitignored but not listed. Its 136K therefore uploads to
+Cloud Build and bakes into the image. The content is harmless test fixtures; the gap is not,
+because it is exactly the drift the file was written to prevent and the next thing to fall
+through it might carry something. Add it to `.gcloudignore` and `.dockerignore` both.
+
+**2. The Dockerfile's comment about the prune is wrong — open issue D11.** It says "esbuild,
+phaser and typescript do not [survive the prune]". `phaser` is in `dependencies`, so it does —
+several MB of dead weight in a runtime image, and a comment that will mislead the next person
+reasoning about image size. Either move `phaser` to devDependencies or correct the comment;
+prefer the move, and verify `build:client` still works at Stage 3.
+
+**3. §7's test table tells you to run `materials-test.ts` the one way its own header forbids.**
+The table says `npx tsx scripts/materials-test.ts`; the file says **NEVER bare `npx tsx`** —
+run that way it reads the committed fixture instead of the corpus `MATERIALS_DIR` points at and
+reports green against the wrong documents, which it has done once already. Correct it to
+`npm run test:materials`. While there: the table gives `HOME_IDLE_S=12` for `idle-test.ts` where
+the file's own header says `10`, and `handout-test.ts` is missing from the table entirely.
+
+### 15e. Stage 3 — the local test gate, then the container
+
+**The suites first.** 6,488 lines have changed and Stage 1 touches identity, the roster and the
+map; this is the cheapest filter available and the first draft of this section skipped it.
+
+```
+npx tsc --noEmit                       # in virtual_space and virtual_ta both
+npm run test:materials                 # virtual_ta — no server, no LLM
+npx tsx scripts/handout-test.ts        # brings its own servers
+```
+
+then, against a **fresh** space server and in this order (agent and avatar state persists for the
+life of the process — `open-issues.md` A2, E5): `smoke.ts`, `integration.ts`, `multiuser.ts`,
+`ghost-test.ts`. Expect `smoke` and `integration` to need updating for the renamed office; that
+is Stage 1's own verification, not a regression.
+
+**Then build and run the container.** This is the highest-value step in the section and it is not
+a deploy:
+
+```
+docker build -t stat689-local .
+
+docker run --rm -p 8080:8080 -e PORT=8080 \
+  -e DEV_USER=jade@local -e ADMIN_EMAILS=jade@local \
+  -e STUDENTS='s1@local=s1,s6@local=s6' \
+  -e ROSTER='s1@local:Test Two,s6@local:Tester' \
+  -e HANDOUT_SALT=local-container-test \
+  -v stat689-local-data:/data stat689-local
+```
+
+- **A named volume, not a bind mount.** The image does `mkdir -p /data && chown node:node /data`
+  and then `USER node`; a bind mount shadows that and a host directory Docker auto-creates is
+  root-owned. A named volume is seeded from the image's directory *including ownership*.
+- **`DEV_USER` is the admin, so open `/?as=s6@local` to be a student.** An admin has no avatar and
+  `init.home === null`, and the 📝 Handouts panel is gated on `init.home` — as the admin you can
+  upload a bundle and preview `/handout/<id>`, but the assignment path needs a student.
+- **One of the two names is deliberately two words.** Stage 1 broadens the possessive test that
+  chooses between "Tester's Office door is shut" and "*the* Library door is shut"; a one-word
+  roster would not exercise the fix. Walk into the occupied TA office and read the refusal.
+- **No `SNAPSHOT_URI`,** so no bucket is touched, and **no LLM key is needed**: the TA's
+  `/api/health` returns `ok` unconditionally, so `start.sh`'s readiness probe passes and the
+  container boots with no Ollama spend. The TA simply cannot answer, which is not what this stage
+  tests.
+
+**Do not proceed to any GCP stage until this serves a handout page with rendered maths, and until
+the two offices are labelled from `ROSTER` rather than from the character placeholders.**
+
+### 15f. Stage 4 — the salt, as a Secret Manager secret rather than an env var
+
+**This deliberately amends §6 stage 2.** That command puts `HANDOUT_SALT` in `--set-env-vars`.
+But **D8** calls the salt a secret, and this file's own header rule is that a secret pasted into
+a transcript stays compromised after it is edited out. As a plain env var it appears in the
+output of every `gcloud run services describe` — including the one run to write §15a above.
+
+```
+openssl rand -hex 24
+```
+
+Put it in Secret Manager beside `ollama-key`, grant the runtime service account
+`roles/secretmanager.secretAccessor` on it, and inject it with `--set-secrets`. **No code
+change:** `--set-secrets` presents it to the process as `process.env.HANDOUT_SALT` exactly as
+before. Two extra commands buy a `describe` output that is safe to paste anywhere.
+
+Write the value down with the other secrets *before* deploying. The `~` constraint from the
+`--set-env-vars` alternate delimiter stops applying once it is a secret, but `openssl rand -hex`
+guarantees hex anyway, and a future revert to env vars should not become a trap.
+
+**Set it once and never change it.** The `.salt-fingerprint` guard turns a changed salt into a
+503 that names the fix, rather than a dashboard quietly showing fewer responses than last week —
+but only the original value actually recovers the data.
+
+### 15g. Stage 5 — grant the second account, and wipe the bucket
+
+**The IAP grant for `<test-2>` — done 2026-08-23, on the instructor's instruction.** All three
+accounts now hold `roles/iap.httpsResourceAccessor`. The command, for the record and for the four
+real students later:
+
+```
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run --service=stat689 \
+  --region=us-central1 --project=stat689 \
+  --member="user:<address>" --role="roles/iap.httpsResourceAccessor"
+```
+
+> **The policy displays addresses with their original capitalisation** — Google echoes back what
+> was typed. It does not matter: `STUDENTS` and `ROSTER` lower-case both sides of every entry, and
+> `slotFor()` lower-cases its argument, so slot and name lookups are case-safe. The one comparison
+> that is *not* case-folded on the incoming address is the admin check in `identity.ts`, and it has
+> been correct in production since Phase C — Google issues the email claim lower-cased. Worth
+> knowing before someone "fixes" a capital letter in an env var.
+
+**Then wipe the bucket — D7 — and note the correction.** The tracker's command is right but its
+procedure is incomplete: `docker/sync.mjs` flushes whenever the newest mtime in `DATA_DIR`
+advances, and it uploads the **whole tree**. Delete `state/` while a container is warm and the
+artefacts are still in that container's `/data`; the next join, message or log line puts them
+straight back.
+
+So: **confirm the service is at zero instances first**, then wipe, then do not touch the URL until
+the new revision is deployed. The wipe sticks because the next boot restores from empty, which is
+a path `sync.mjs` handles by design. D7 has been corrected to say this.
+
+The deadline is unchanged: free today, destructive the moment a student has used the space, no
+versioning and no undo.
+
+### 15h. Stage 6 — deploy
+
+§6 stage 2's command, with three amendments:
+
+- **add the roster pair.** Both variables, together, or the accounts sign in and land under a
+  character's name:
+
+  ```
+  STUDENTS=jadewang@tamu.edu=s6,<test-2>=s1
+  ROSTER=jadewang@tamu.edu:Tester,<test-2>:<Test2Name>
+  ```
+
+  `s6` is the slot renamed from `jade` in Stage 1. `<test-2>` takes `s1`, which retires that
+  slot's AI stand-in and keeps the character count at six — the slot choice is arbitrary and
+  lives in an env var, so it is a one-word change later. After Stage 1, omitting a `ROSTER`
+  entry for an assigned slot is a **boot failure** behind IAP rather than a wrong name.
+- **move `HANDOUT_SALT`** out of `--set-env-vars` and into `--set-secrets`, per 15f.
+- **ignore every reference to `jadewang@gmail.com`.** It appears in §6 stage 2, stage 3 and stage
+  4 step 4b as the test-student account; it is a third address that has no IAP grant, so nobody can
+  sign in as it. Had it gone out as written, the account actually used for testing would have
+  signed in fine and landed in the Common Area — D5b exactly. §6 now carries a superseding note
+  saying so; the lines stay because D5b quotes them.
+
+Everything else is unchanged and already correct on the live service: the runtime service
+account, `--min-instances=0 --max-instances=1`, `--timeout=3600`, `--memory=1Gi`, and
+`--no-allow-unauthenticated --iap`.
+
+**§6 stages 1 and 3 are otherwise done and must not be repeated.** The service account exists and
+IAP is attached to the OAuth client at the project level.
+
+### 15i. Stage 7 — verify the things only the cloud can answer
+
+§6 stage 4 still covers the auth path and is not repeated. These are new, in order, and each one
+exists because nothing local tests it:
+
+1. **Startup log.** `Auth: IAP, JWT-verified`, `Roster: 6 student slots — 2 assigned (Tester,
+   <Test2Name>)`, and the `Handouts:` line. "0 assigned" is D5b; a name shown as a character
+   placeholder means Stage 1 regressed; a salt complaint means 15f went wrong and the line says
+   which way.
+2. **Sign in as both students.** Each must land in **their own** office, and each office must be
+   **labelled with their name** — the real test of Stage 1, and not something the local container
+   proves for IAP-supplied identities.
+3. **Upload a bundle through the admin panel.** Regenerate it first —
+   `npm run bundle:handout fixtures/handout-sample` — because `fixtures/*.handout.json` is
+   gitignored and therefore not in the image. This is the only test of the large-body POST
+   through IAP.
+4. **Open the handout as a student and confirm the maths renders**, not raw `$…$`. This is the
+   `/katex` mount, and it is the failure that would otherwise reach a student first.
+5. **Grade a section, then open `/admin/handouts/sample-attention?names=1`.** Both names must read
+   correctly there too — it is the fourth surface, and the one with no other reader.
+6. **Force a restart and confirm the response survived.** Let the service scale to zero rather
+   than deploying a no-op revision: it is free, and it is the better test, because it also
+   exercises the SIGTERM final flush that a new revision does not. **This is the only test of
+   whether handout responses are durable at all** — `data/handouts/` is new since the last
+   container ever ran. It should round-trip; "should" is the word this step exists to replace.
+7. **Two `[sync] flushed (changed)` lines**, per §6 stage 4 step 6: one proves the token, two
+   prove the overwrite permission.
+8. **One reading upload and one TA answer citing it**, confirming step 2's corpus works when the
+   shipped fixture is the only thing in the image.
+9. **Idle one student out of the TA office** and confirm they return to their *own* office (E8).
+
+### 15j. Stage 8 — afterwards
+
+- **Check Artifact Registry.** D2's cleanup policy is active and verified — `keep-recent-versions`
+  at 3, `delete-untagged` at 7 days, `delete-stale` at 60. One image today at 113.8 MB against the
+  0.5 GB free allowance, so a deploy plus a rollback candidate fits comfortably; iterating deploys
+  does not, which is what Stage 3 exists to prevent.
+- **Tick in `open-issues.md`, not here:** D5b (both test accounts — the real students remain D5),
+  D7, D8, D10, D11, E8, plus whatever the deploy exposes.
+- **Merge to `main` only after Stage 7 passes.** `--source=.` deploys the working tree, so this is
+  not a mechanical requirement — but `main` currently means "known good in production", which is
+  worth preserving. Deploy from `multi-user-and-deploy-prep`, verify, then merge.
+- **Wipe the bucket again** before the first real class, at zero instances per 15g, because this
+  verification will leave artefacts in it: a sample handout, two graded responses, a test reading.
+
+### 15k. What this stage deliberately does not do
+
+- **No real handout.** `fixtures/handout-sample` is a three-version fixture; the real thing is six
+  versions of four to six sections and has not been written yet. This stage proves the *plumbing*,
+  and the plumbing is what a container can break.
+- **No student onboarding.** D5's addresses are still outstanding, and **D12** — how many of the
+  six slots real students get, once two are held by test accounts — is deferred until the class
+  list is final.
+- **Nothing about E7.** There is still no way to withdraw a handout. But the removal path exists
+  and it is 15g's procedure: scale to zero, wipe the bucket, and the next boot restores from
+  empty. So the sample handout is recoverable, which is weaker than a withdraw button and
+  sufficient before any student is in the space.
+
+### 15l. Rollback
+
+`stat689-00002-c5j` stays in the revision list, and its image survives this deploy — checked
+against the cleanup policy above rather than assumed. If the new revision is bad:
+
+```
+gcloud run services update-traffic stat689 --to-revisions=stat689-00002-c5j=100 \
+  --region=us-central1 --project=stat689
+```
+
+That reverts the *code* in seconds. It does **not** revert the bucket: anything the new revision
+wrote to `state/current.tar.gz` stays written, and the old revision will restore it on its next
+boot. Given that Stage 5 empties the bucket first and every write this round is a test artefact,
+that is acceptable — but it would not be with real student state, and it is worth recording as
+the reason traffic-splitting is not a general safety net for this app.

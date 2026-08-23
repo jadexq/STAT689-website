@@ -11,8 +11,8 @@ shipped two days earlier and §14i still read "Still open" for closed items. **T
 status. The plan owns rationale.** When something is resolved, tick it here and leave the plan's
 account of it alone.
 
-Last reviewed: **2026-08-22** (updated after the TA simplification — see
-[`app-changes.md`](./app-changes.md))
+Last reviewed: **2026-08-23** (updated while drafting the redeploy — see
+[`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15; D10 and D11 filed from it)
 
 > ### Read these two before the next deploy
 >
@@ -341,9 +341,15 @@ Recorded so they are not rediscovered as if they were new problems.
   Cloud Run, which nobody is watching mid-class.
 - **Fastest check:** the startup line `Roster: 6 student slots — N assigned (…)`. `0 assigned`
   names the problem outright.
-- **Outstanding now:** `jadewang@gmail.com` (the instructor's own test-student account) has
-  neither. It works locally because `virtual_space/.env` assigns the slot; `.env` is not
-  deployed. Slot `jade` → Jade's Office.
+- **Outstanding now, corrected 2026-08-23.** Earlier revisions of this item and of the runbook
+  named `jadewang@gmail.com` as the test-student account. That address does not have an IAP grant
+  and is not used; the real test accounts are **`jadewang@tamu.edu`** ("Tester", slot `s6`) and a
+  **second test account** whose address is deliberately not written in this repo (slot `s1`,
+  retiring that slot's stand-in).
+  - IAP grant: **done for all three accounts** (the second was granted 2026-08-23).
+  - `STUDENTS` **and** `ROSTER`: neither is set on the service at all. Both go in at the redeploy.
+  - Had the old value shipped, the account actually used for testing would have signed in fine and
+    landed in the Common Area — this item's own failure mode, caused by this item's own runbook.
 - **Also note:** adding a `STUDENTS` entry is a Cloud Run env change, so it creates a **new
   revision**. The IAP grant does not. Batch the env updates rather than doing one per student.
 - Written into the runbook at [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §6 stage 2
@@ -411,6 +417,12 @@ Recorded so they are not rediscovered as if they were new problems.
 
   The service recreates the prefix on the next flush; `restore` handles a missing snapshot by
   design (proven at the Stage 2 first boot).
+- **Correction 2026-08-23 — the command alone is not enough.** `docker/sync.mjs` flushes whenever
+  the newest mtime under `DATA_DIR` advances, and it uploads the **whole tree**. Run the wipe while
+  a container is warm and nothing is actually removed: the artefacts are still in that container's
+  `/data`, and the next join, message or log line puts them straight back.
+  **Confirm the service is at zero instances first**, then wipe, then leave the URL alone until the
+  next deploy. The wipe sticks because the following boot restores from empty.
 - **Resolved when:** either the wipe is done before the first class, or a student has used the
   space and the item is deliberately closed unexecuted.
 
@@ -458,6 +470,50 @@ Recorded so they are not rediscovered as if they were new problems.
   not against the instructor, and the version rotation makes attribution inferable anyway (see
   D8). Saying so plainly is better than implying an anonymity that does not exist — and with six
   PhD students who already know they are being read, it costs less candour than pretending would.
+
+### D10. `test_material/` is gitignored but not in `.gcloudignore`, so it ships
+- [ ] **Open. Small, and the file it breaks exists to prevent exactly this.**
+- `.gcloudignore`'s own header records why it exists: it **replaces** gcloud's inference from
+  `.gitignore`, so "the list below must be complete. Anything not excluded here IS uploaded, even
+  if .gitignore covers it."
+- `test_material/` (136K — `manifest.json`, three test markdown documents) is in `.gitignore` at
+  line 14 and in neither `.gcloudignore` nor `.dockerignore`. It therefore uploads to Cloud Build
+  and bakes into the runtime image.
+- **Severity is low but the shape is bad.** The content is test fixtures, not secrets, and nothing
+  reads it in the container (`MATERIALS_DIR` is unset there, so `materials.ts` falls back to the
+  repo's own `virtual_ta/materials/`). What is worth fixing is the gap itself: this is the second
+  list that has to be updated by hand whenever the first one is, and it silently failed once
+  already.
+- **Fix:** add `test_material/` to both files. Then re-read both lists against `.gitignore` once,
+  since one omission suggests others.
+- Planned as [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15d item 1.
+
+### D11. The Dockerfile says `phaser` does not survive the prune. It does.
+- [ ] **Open. Cosmetic in effect, misleading in a place people reason from.**
+- The build stage comments: "Both esbuild and phaser are build-time only — the browser gets the
+  bundle", and "esbuild, phaser and typescript do not [survive the prune]".
+- But `phaser` is listed in **`dependencies`**, not `devDependencies`, so `npm prune --omit=dev`
+  keeps it: several MB of a library that only ever runs in the browser, sitting in the runtime
+  image.
+- Matters because image size is a tracked constraint here — D2's Artifact Registry allowance is
+  0.5 GB against ~107 MB per image, and this comment is precisely what someone would read while
+  trying to work out where the megabytes are going.
+- **Fix:** move `phaser` to `devDependencies` and confirm `npm run build:client` still bundles,
+  or correct the comment. Prefer the move. Verify against the local container build.
+- Planned as [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15d item 2.
+
+### D12. How many of the six slots do real students get?
+- [ ] **Deferred by the instructor, 2026-08-23. Revisit when the class list is final.**
+- The roster has **six** slots. Two are now held by test accounts (`s6` and `s1`), leaving four
+  for real students. The class is expected to be about six.
+- Nothing is broken either way — `homeRoomFor` sends an unassigned address to the Common Area, and
+  the handout rotation is exact at six students against six versions and degrades correctly below
+  that. But four offices for six students is a decision, not an accident, and it should be made
+  deliberately rather than discovered in week one.
+- **Options when the number is known:** add slots (each needs an office on the map), retire a test
+  account once testing is done, or accept that some students share the Common Area — the last of
+  which also costs them handouts, since an unassigned address is refused one (D5b).
+- **Resolved when:** the class list is final and the slot count is set to match.
 
 ---
 
@@ -599,6 +655,7 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 - Fixed by `server/roster.ts`: six student characters, one office each, addresses assigned in the
   environment. See `app-changes.md` for the design and why a slot is a character rather than a
   person.
+- **Incompletely, as it turns out** — one of the four call sites was missed. See **E8**.
 
 ### E7. There is no way to remove a handout, for the same reason there is no way to remove a reading
 - [ ] **Open. Small, and the second instance of one gap.**
@@ -614,6 +671,21 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   content hash means the old grades are marked stale rather than silently reattached.
 - The right shape is therefore probably *withdraw* (hide from students, keep the responses) rather
   than *delete*. Not urgent, and not in step 4's scope.
+
+### E8. E6 survives on one path — idle eviction from the TA office still hardcodes one office
+- [ ] **Open. One line. Reachable as soon as a second account holds a slot.**
+- **E6** replaced `roomById("office-jade")` with `homeRoomFor(email)` as the home of a human, and
+  is marked resolved. Three of the four sites were converted — `MainRoom.ts` lines 185, 240 and
+  414. **Line 392 was missed**: when the TA office's occupant goes quiet, they are walked home to
+  a hardcoded office regardless of who they are.
+- E6's own text predicted the symptom — "the new idle timer would have returned all five students
+  to the same tile" — and on this path it is still exactly true.
+- Invisible while one account holds a slot, because that account *is* the hardcoded office's
+  owner. The second test account is the first thing that makes it reachable.
+- **Fix:** the same call the sweep at line 414 already uses. Filed separately rather than
+  reopening E6 so the resolved record of what E6 was stays intact.
+- Planned as part of [`app-changes.md`](./app-changes.md) 2026-08-23, "A person's name, everywhere
+  the character's placeholder shows".
 
 ---
 
