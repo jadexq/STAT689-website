@@ -35,7 +35,10 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Announcements, a real Library, and the project repo
 
-**Status:** **planned** — no code written. This entry exists to be reviewed before any is.
+**Status:** **steps 1-3 not started.** Two pieces of *enabling* work have landed so the plan
+could be checked against real documents rather than a fixture: `7e4b2c0` (a `MATERIALS_DIR`
+override and `npm run test:materials`) and `7539de7` (test fixtures gitignored). Neither is part
+of steps 1-3; both are what turned 2f from an estimate into a measurement.
 **Scope:** three of the four features the instructor described. The fourth — interactive
 handouts that students fill in and submit — is deliberately held back; see *Held back*.
 
@@ -125,7 +128,7 @@ discover on day one that they cannot read their own noticeboard.
 | 2b | **The Library board becomes the materials shelf, and `.md` is rendered on the way out** | Cards from the proxied list — title, one line, a link the space serves. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in one step; that single-source property is the entire reason for 2a. **The file route renders `.md` to HTML before serving it**, because markdown is the best format for the TA and the worst for a student who clicks it — a browser shows raw text or offers a download. Rendering **server-side** keeps it off a client bundle that is already ~1.2 MB. `.html` and `.pdf` are passed through untouched. | `virtual_space/server/index.ts`, `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
 | 2c | **`agenda.md`, parsed against the real file** | Columns are the instructor's, not an invented set: `Date \| Week \| Lecture \| Content \| Homework \| Topic`. Three properties the file actually has and a naive parser gets wrong: **`Topic` spans** — it is filled on the first row of a block and blank after, so blank means *continues above*, not *no topic*; **dates must carry the year**. The master in `syllabus/` writes `08/24`; the instructor's test copy writes `2026/08/24`. Standardise on the second and the problem disappears — inferring the year from the clock shows a student opening the page in January next year's course, and a configured year is one more thing to forget each August. A self-describing date needs neither. The parser accepts only the four-digit form and reports a row it cannot date rather than guessing; and **most rows are empty** (weeks 4-15 are placeholders), so the schedule renders them as scheduled-but-unplanned rather than as blanks. | `virtual_ta/materials/agenda.md`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
 | 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Markdown makes this side nearly free: the TA already ingests `.md` from `materials/`, so the agenda is a manifest entry and a pinned-context flag rather than a JSON-to-text generator. Always included rather than retrieved — it is the one document where retrieval missing it yields a *confidently wrong* answer about a deadline instead of a vague one. **Only rows with content go into the prompt** — forty blank placeholder rows are not neutral filler, they invite the model to fill them in, and an invented Week 9 topic stated with the agenda's authority is worse than "not scheduled yet". | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
-| 2e | **Upload without a redeploy** *(now recommended — see provenance below)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
+| 2e | **Upload without a redeploy** *(now recommended — see provenance below)* | Materials are baked into the container, so today a new reading costs a build. `MATERIALS_DIR` (`7e4b2c0`) already *relocates* the corpus, which is enough for local testing but replaces it wholesale; 2e adds `DATA_DIR/ta/materials` as a **second root** so uploaded and shipped readings coexist, plus the upload form on the admin card. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
 | 2f | **Long documents** — *not optional, and measured* | The first real reading is **113,207 chars**, thirty times the only document the pipeline had ever seen. Measured against it: naming the document returns **28,034 chars — 25% of it**, and the §14 content is **not in the slice**. `matchReading` fires on ordinary phrasing (*"in the practitioner's notes, what does it say about MCP?"* → match), and `session.readingId` is **sticky** — `coach.ts` only takes the search path when it is unset — so one such question pins **the whole rest of that conversation** to the first quarter of the document, including questions retrieval would have answered correctly. The search path itself works but hits `MAX_CHUNKS_PER_DOC = 4` on every query. Fix: **chunk on headings** (19 `##`, 106 `###`), which also makes passages self-describing so the TA can cite *§5* rather than a title; raise the per-doc cap while the corpus is small; and when a named reading does not fit, **retrieve within it** instead of truncating it. | `virtual_ta/server/materials.ts`, `virtual_ta/server/skills/coach.ts` |
 
 **On formats.** All three are already supported (`materials.ts` branches on extension: `unpdf` for
@@ -158,9 +161,11 @@ git history outlives. So either scrub the internal references, or keep the corpu
 load it from `DATA_DIR` — which is exactly 2e. That is why 2e moved from droppable to
 recommended: it turns out to be a confidentiality boundary, not just a convenience.
 
-**On 2e:** it is the difference between "adding a reading is a git commit and a deploy" and
-"adding a reading is a drag and drop". Worth having before the semester, not necessarily before
-the next test. Flagged droppable rather than dropped.
+**On 2e.** It is the difference between "adding a reading is a git commit and a deploy" and
+"adding a reading is a drag and drop" — but that is no longer the main argument for it, and it is
+no longer droppable. The provenance note above is: the corpus needs a home that is not the git
+repo. Half the mechanism already exists (`MATERIALS_DIR`, `7e4b2c0`); 2e is the rest — a second
+root under `DATA_DIR` so uploads and the shipped fixture can coexist, plus the upload form.
 
 ### Step 3 — The project repo in the Computer Lab
 
@@ -187,12 +192,18 @@ the next test. Flagged droppable rather than dropped.
 Existing suites, plus the new leg in 1e. `npx tsc --noEmit` clean. The order-dependency rule
 still holds — the first four suites run against a fresh server, in order.
 
+**Run `materials-test` as `npm run test:materials`, never bare.** `virtual_ta` loads `.env` only
+through node's `--env-file-if-exists`, which the npm scripts pass and a bare `npx tsx` does not.
+Run bare, the suite silently reads the committed fixture instead of the real corpus and reports
+**green against the wrong documents** — which it did, once. Same family as the `idle-test` window
+variables belonging on the server, and as the `server/env.ts` import-order trap.
+
 | Suite | What it must show after this |
 |---|---|
 | `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
 | `integration` | board count 2 → 8; the announcement→TA leg from 1e |
 | `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
-| `materials-test` | agenda parsed with spanning topics and no year; a malformed row still renders; each format (`.md`, `.html`, `.pdf`) extracts to sane text; **a question whose answer lives in the last quarter of the 114 KB reading is answered correctly** — the 2f regression test; README present after 3b |
+| `materials-test` | agenda parsed with spanning topics and four-digit years, and an undatable row reported rather than guessed; a malformed row still renders; each format (`.md`, `.html`, `.pdf`) extracts to sane text; **a question whose answer lives in the last quarter of the 113 KB reading is answered correctly** — the 2f regression test; README present after 3b |
 | `idle-test` | unchanged |
 
 ### Held back — feature 4 (handouts with saved answers)
