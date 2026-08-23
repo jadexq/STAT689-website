@@ -11,7 +11,8 @@ shipped two days earlier and §14i still read "Still open" for closed items. **T
 status. The plan owns rationale.** When something is resolved, tick it here and leave the plan's
 account of it alone.
 
-Last reviewed: **2026-08-22** (updated during the Phase C deploy)
+Last reviewed: **2026-08-22** (updated after the TA simplification — see
+[`app-changes.md`](./app-changes.md))
 
 ---
 
@@ -21,7 +22,7 @@ A1 and A2 were found while verifying the pre-Phase-C changes and both were repro
 checkout of `09f5e81`, so neither was a regression from that work. Neither was fixed at the time,
 because fixing tests inside an auth change is how you lose track of what broke what. **Both were
 resolved on 2026-08-22 in `7eedc2a`** — see [`app-changes.md`](./app-changes.md) for the plan
-and what the diagnosis got wrong twice. A3 is new and still open.
+and what the diagnosis got wrong twice. **A3 was dissolved rather than diagnosed** — see below.
 
 ### A1. `ghost-test.ts` asserts a stale entity count
 - [x] **Resolved 2026-08-22, `7eedc2a`.** The absolute total was removed rather than corrected:
@@ -69,7 +70,11 @@ and what the diagnosis got wrong twice. A3 is new and still open.
   both students answered on the first attempt.
 
 ### A3. `integration.ts` step 6 failed once in two runs
-- [ ] **Open — intermittent, cause not established. Recorded rather than dismissed.**
+- [x] **Closed 2026-08-22 — the assertion no longer exists. NOT diagnosed.** Step 6 was rewritten
+  when the TA became immovable: it now walks only the student, so there is no rendezvous to miss
+  and no un-retried `admin send` in the path. The suite has run green five times since. Recording
+  this honestly matters: if a comparable two-entity wait is ever added back, this is unproven
+  ground, not settled ground. The original analysis is kept below for that day.
 - **Symptom:** `TIMEOUT waiting for: Jade & Terra in the Computer Lab` (2026-08-22). The same
   code passed on the run before and the run after, so it is intermittent, not broken.
 - **Not caused by the A1/A2 work**: those commits touch only `ghost-test.ts` and
@@ -366,8 +371,13 @@ Recorded so they are not rediscovered as if they were new problems.
 Product bugs, as distinct from deployment problems. Found by using the thing, not by testing it.
 
 ### E1. The TA cannot post to the Library board
-- [ ] **Open — reported by the instructor 2026-08-22, deferred by decision ("we can fix this
-  later"). Not a deployment blocker: sign-in, identity, rooms and the TA conversation all work.**
+- [ ] **Open, but the reported path no longer exists (2026-08-22).** Posting used to mean: ask the
+  `announce` skill to compose, review a preview, then pin. The compose step is gone — the
+  instructor types the post and pins it (`7845269`). Whatever was failing in the composed path
+  cannot fail in a textarea, and `smoke` and `integration` both now assert the pinned text arrives
+  at a student's board **worded exactly as typed**.
+  **Still open because it was reported against the deployed service and nothing is deployed yet.**
+  Close it by pinning one post in the cloud, not by reasoning about it.
 - **Symptom as reported:** signed in and walking the space works, but the TA does not manage to
   post anything to the Library board. Everything else seemed fine.
 - **Not yet reproduced or diagnosed.** What follows is where to start, not a cause. Do not treat
@@ -396,8 +406,16 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 - **Resolved when:** the TA pins a post to the Library board **in the deployed app**, a student
   walking in sees it, and it survives an instance restart.
 
-### E2. A student who messages Terra while she is busy gets silence
-- [ ] **Open — found 2026-08-22 while diagnosing A2. Not urgent today, likely visible in class.**
+### E2. A student who messages the TA while they are busy gets silence
+- [x] **Resolved 2026-08-22 in `260c578` — by removing the contention, not by apologising for it.**
+  The TA office admits one human at a time. A second student never reaches the room to be ignored
+  in it: they are stopped at the door and told who is inside. The dropped-message path still
+  exists in `scheduleReplies` — it is simply no longer reachable for the TA, because there cannot
+  be a second student in the room to trigger it.
+  Two consequences worth keeping in view. The wait is now visible but also *longer*: one
+  conversation at a time is a real throughput limit with five students, and the lever for that is
+  the idle timeout (`SOLO_IDLE_S`), not the door. And the silence is still there for the five
+  virtual students, who share rooms freely — nobody has complained, and nothing depends on it.
 - **Behaviour.** `MainRoom.scheduleReplies` (line 287) builds the reply set from
   `agents.filter(a => ... && !a.busy)`, and `agentRespond` (line 297) returns early if the agent
   is busy. So a message sent to Terra while she is mid-LLM-call is dropped: **no reply, no
@@ -415,8 +433,30 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   actually matches what a student expects.
 - **Deliberately not fixed inside the A1/A2 test work** — a product change made inside a test
   fix is how you lose track of what broke what.
-- **Resolved when:** a student messaging a busy Terra gets some visible response, and two
-  students asking at once both end up answered or both told to wait.
+- **Resolved when:** ~~a student messaging a busy Terra gets some visible response, and two
+  students asking at once both end up answered or both told to wait.~~ Met: the second student is
+  told, at the door, that someone is with the TA and who. Verified by `multiuser` steps 6-7.
+
+### E3. Bullet lists and headings still arrive as raw markdown in the space chat
+- [ ] **Open — cosmetic, low cost to live with, cheap to finish.**
+- The chat bubble renders bold, inline code and links (`ea9bb22`), which covers most of what the
+  TA writes. Lists (`- `), numbered lists and `##` headings still show their markers.
+- Mitigated from the other side: the coach prompt now asks for conversational sentences rather
+  than documents, which is why this went from constant to occasional. A prompt is a request, not
+  a guarantee — a long enough answer still reaches for a list.
+- **Resolved when:** either the renderer handles lists, or a stripping pass runs on TA replies
+  before they leave the server. Do not do both.
+
+### E4. Cross-document retrieval has never been exercised
+- [ ] **Open — not a defect. A gap in what the evidence can support.**
+- `materials/manifest.json` lists **one** reading, so every part of `searchMaterials` that exists
+  to choose *between* documents — the idf weighting, the title boost, `MAX_CHUNKS_PER_DOC` — is
+  running but has nothing to discriminate. `scripts/materials-test.ts` says so out loud rather
+  than passing quietly.
+- The risk is not that search breaks; it is that it looks fine now and ranks badly the week the
+  instructor adds ten readings, with no baseline to compare against.
+- **Resolved when:** the real corpus is in place and a handful of course questions are checked to
+  see whether the passage that comes back is the one a human would have picked.
 
 ---
 

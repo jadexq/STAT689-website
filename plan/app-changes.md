@@ -35,7 +35,8 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Simplify the TA: one room, one mode, one job
 
-**Status:** **approved 2026-08-22, in progress.** Open decisions settled — see the end of this entry.
+**Status:** **shipped 2026-08-22**, verified locally. Six commits, `6d241cc`..`3ee84f6`.
+**Not deployed** — the running revision still serves the pre-change app.
 **Supersedes:** the room-as-mode-selector design (`map.ts` `forcedSkill`) and the
 LLM-composed board post (`admin` action `compose`).
 
@@ -160,18 +161,26 @@ Note the throughput this implies: one student at a time, so five students is a q
 constraint already existed invisibly (the `busy` flag); this makes it explicit. If it bites,
 the lever is the idle timeout, not the door.
 
-### Plan — four commits, each independently testable
+### What shipped
 
-1. **Rename.** `Terra` → `TA` in the display name and persona; `agent-terra` → `agent-ta`;
-   `TERRA_ID` → `TA_ID`. Comments switch from "she" to "the TA". Existing `boards.json` entries
-   keep the old byline — cosmetic, and `open-issues.md` D7 wipes state before the first class.
-2. **Lock + collapse.** TA immovable for everyone; admin `send` refuses the TA; `forcedSkill`
-   plumbing goes dormant; router forced to `coach`; hint text and admin banner rewritten.
-3. **Door.** Single occupancy, `notice` message, closed-door rendering, occupancy broadcast.
-4. **Idle return.** Warn, walk home, free on disconnect.
+| Commit | What |
+|---|---|
+| `6d241cc` | Rename Terra → TA: display name, persona, `agent-ta`, `TA_ID`, pronouns |
+| `7845269` | TA immovable for everyone; modes collapsed to one; router short-circuited; board posts typed; Prep Room sealed |
+| `260c578` | Single occupancy on the TA office, enforced in three places; door freed on disconnect |
+| `82fff27` | Idle warn at 4 min, walk home at 5, windows env-tunable |
+| `ea9bb22` | Render the TA's bold/code/links in the chat bubble instead of showing the markers |
+| `3ee84f6` | Chunked keyword retrieval over the materials; sources reported as a chip |
 
-Materials retrieval (requirement 5) is a fifth, larger commit in `virtual_ta` — planned
-separately once the posture question above is settled.
+**Two of those were not in the plan.** Both were found by watching the thing work rather than by
+reasoning about it, which is the argument for running it before calling it done:
+
+- `ea9bb22` — the TA brain writes light markdown and the space showed it raw. Tolerable while the
+  TA was one feature among several; unmissable once talking to them is the whole application.
+- The sources chip in `3ee84f6` — the first grounded answers did not name their source despite
+  the prompt asking them to, and arrived as bulleted essays. The prompt was tightened, but the
+  citation moved to something the server reports rather than something the model must remember.
+  **A citation the model has to write is a citation it will sometimes skip.**
 
 ### The part that is not small — tests
 
@@ -207,11 +216,31 @@ persist. The placement block added in `7eedc2a` becomes dead weight the day this
 2. **Timeout** — in scope; 4-minute warning, 5-minute return, as proposed.
 3. **Empty rooms** — seal the Prep Room; leave the Computer Lab open.
 
+### Verification — done 2026-08-22
+
+All four suites green, twice, plus two new ones:
+
+| Suite | Covers |
+|---|---|
+| `smoke` | TA refuses to be walked; a virtual student still can be; student walks in and is answered; typed post reaches the board verbatim |
+| `integration` | Both movement paths refused (keyboard *and* panel); Classroom and Prep Room sealed; the TA does not answer from another room; speak-as-TA heard in the office |
+| `multiuser` | Door shut behind the first student, naming who is inside; reopens when they leave; separate TA conversations per student |
+| `ghost-test` | Unchanged — rejoin still replaces a stale avatar |
+| `idle-test` (new) | Warned before moved, walked home, door reopens, speaking resets the clock. Run with `SOLO_WARN_S=4 SOLO_IDLE_S=8` |
+| `materials-test` (new) | Index builds, passages are labelled, budget respected, nonsense matches nothing. No LLM, no server |
+
+End-to-end check of the thing the change is actually for: *"What are queries, keys and values in
+attention?"* — no document named — came back as four conversational sentences grounded in the
+attention reading, tagged with its title.
+
+**Tracker effects:** A3 dissolved (the rendezvous assertion is gone, not diagnosed), E2 resolved,
+E1's reported path removed but still open pending a deployed check, E3 and E4 opened.
+
 ### Rollback
 
-Each commit reverts independently. The riskiest is 2, because it changes what the instructor can
-do; reverting it restores movement and the room-based modes together, since they are the same
-mechanism.
+Each commit reverts independently. The riskiest is `7845269`, because it changes what the
+instructor can do; reverting it restores movement and the room-based modes together, since they
+are the same mechanism.
 
 ---
 
