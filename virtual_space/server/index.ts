@@ -13,6 +13,7 @@ import { logFilePath } from "./logger";
 import { identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
 import { taMaterialFile, taMaterials } from "./ta";
+import { renderMarkdownPage } from "./render";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -45,6 +46,14 @@ app.get("/api/materials/:id/file", async (req, res) => {
     const found = await taMaterialFile(String(req.params.id));
     if (!found) {
       res.status(404).type("text/plain").send("No such reading.");
+      return;
+    }
+    // .md is rendered here; .html and .pdf are passed through untouched,
+    // because for those two the file already IS the presentation.
+    if (found.type.startsWith("text/markdown")) {
+      const list = await taMaterials().catch(() => []);
+      const title = list.find((r) => r.id === req.params.id)?.title ?? "Course reading";
+      res.type("html").send(renderMarkdownPage(title, found.bytes.toString("utf8")));
       return;
     }
     res.setHeader("content-type", found.type);

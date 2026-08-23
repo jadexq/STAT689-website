@@ -64,6 +64,14 @@
   select:focus, textarea:focus, input:focus { border-color: var(--accent); }
 
   #board-card { display: none; }
+  #shelf-wrap { display: none; border-bottom: 1px solid var(--line); }
+  #shelf-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }
+  #shelf { padding: 4px 14px 12px; max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .shelf-item { background: #16281f; border: 1px solid #2c5443; border-radius: 10px; padding: 8px 11px; font-size: 13px; }
+  .shelf-item a { color: var(--ok); text-decoration: none; font-weight: 600; }
+  .shelf-item a:hover { text-decoration: underline; }
+  .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
+  .shelf-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
   #board-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--warn); font-weight: 700; }
   #board-list { padding: 4px 14px 12px; max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .board-item { background: #2a2416; border: 1px solid #5a4a22; border-radius: 10px; padding: 8px 11px; font-size: 13px; white-space: pre-wrap; }
@@ -127,7 +135,7 @@
 <div id="app">
   <div id="game-col">
     <div id="game"></div>
-    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. <b>To talk to the TA, walk into the TA Office</b> — one student at a time, so the door shuts while someone is in there. Your own room has a 📌 <b>announcements</b> board — that is where homework and notices from the instructor appear. The <b>Library</b> and <b>Computer Lab</b> have 📌 boards of their own. The <b>Classroom</b> and <b>Prep Room</b> 🚧 are closed.</div>
+    <div id="game-hint"><b>Move:</b> arrow keys / WASD, or click a tile to walk there. <b>Look around:</b> two-finger scroll (trackpad) pans the view, or drag inside the minimap — moving again re-centers on you. <b>Chat</b> reaches whoever is in the same room. <b>To talk to the TA, walk into the TA Office</b> — one student at a time, so the door shuts while someone is in there. Your own room has a 📌 <b>announcements</b> board — that is where homework and notices from the instructor appear. The <b>Library</b> holds the 📚 course material — walk in and click a reading to open it. The <b>Library</b> and <b>Computer Lab</b> have 📌 boards of their own. The <b>Classroom</b> and <b>Prep Room</b> 🚧 are closed.</div>
   </div>
 
   <div id="side">
@@ -137,6 +145,13 @@
     </div>
 
     <div class="card" id="board-card">
+      <!-- The Library's shelf: the course readings, as the TA's own corpus
+           reports them. It sits ABOVE the pinned posts, it does not replace
+           them — the Library is still somewhere the instructor pins to. -->
+      <div id="shelf-wrap">
+        <div id="shelf-title">📚 Course material</div>
+        <div id="shelf"></div>
+      </div>
       <div id="board-title">📌 Board</div>
       <div id="board-list"></div>
     </div>

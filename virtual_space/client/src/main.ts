@@ -580,13 +580,70 @@ function renderRich(text: string): string {
     .replace(/https?:\/\/[^\s)<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 
+// The Library shelf. The list is the TA's own manifest, proxied by the space
+// (the TA's port is not reachable from a browser), so adding a reading to
+// manifest.json puts it on the shelf AND in the TA's answers in one step.
+// Fetched on each entry rather than cached for the session, so a reading the
+// instructor adds mid-class appears on the next visit rather than the next
+// reload.
+type ShelfItem = { id: string; title: string; link?: string; format: string };
+
+async function renderShelf(show: boolean) {
+  const wrap = $<HTMLDivElement>("shelf-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  const list = $<HTMLDivElement>("shelf");
+  const note = (text: string) => {
+    list.innerHTML = "";
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = text;
+    list.appendChild(d);
+  };
+  if (!list.children.length) note("Fetching the reading list…");
+
+  let readings: ShelfItem[];
+  try {
+    const res = await fetch("/api/materials");
+    readings = ((await res.json()) as { readings?: ShelfItem[] }).readings ?? [];
+  } catch {
+    readings = [];
+    note("The reading list is unavailable right now.");
+    return;
+  }
+  if (!readings.length) {
+    note("No readings posted yet.");
+    return;
+  }
+  list.innerHTML = "";
+  for (const r of readings) {
+    const d = document.createElement("div");
+    d.className = "shelf-item";
+    const a = document.createElement("a");
+    // Served by the space, which renders .md to HTML on the way out — a
+    // browser handed raw markdown shows source or offers a download.
+    a.href = `/api/materials/${encodeURIComponent(r.id)}/file`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = r.title;
+    d.appendChild(a);
+    const tag = document.createElement("span");
+    tag.className = "fmt";
+    tag.textContent = r.format || "file";
+    d.appendChild(tag);
+    list.appendChild(d);
+  }
+}
+
 function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {
   const card = $<HTMLDivElement>("board-card");
   if (!msg.roomId) {
     card.style.display = "none";
+    void renderShelf(false);
     return;
   }
   card.style.display = "block";
+  void renderShelf(msg.roomId === "library");
   $<HTMLDivElement>("board-title").textContent = `📌 ${msg.room} board`;
   const list = $<HTMLDivElement>("board-list");
   list.innerHTML = "";
