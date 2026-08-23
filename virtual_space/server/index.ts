@@ -82,7 +82,10 @@ app.get("/api/materials/:id/file", async (req, res) => {
 app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (req, res) => {
   let who;
   try {
-    who = await identify(req);
+    // ?as=… is the same local-testing override the websocket side honours,
+    // and identify() ignores it behind IAP. It is what makes "a student
+    // cannot upload" a thing the suite can actually assert.
+    who = await identify(req, req.query.as);
   } catch {
     res.status(401).json({ ok: false, note: "Could not verify who you are." });
     return;

@@ -220,13 +220,71 @@ async function main() {
   // Models emit typographic spaces and hyphens (U+2011, U+202F...). Asserting
   // on raw output makes a correct answer look like a failure — it did once.
   const answer = sChats.slice(mark8).find((c) => c.from === "TA")!.text.replace(/[^\x20-\x7E]/g, " ");
-  assert(/11\s*\/\s*18|November\s+18/i.test(answer) && /BLOC\s*411/i.test(answer),
+  // Accept any spelling of the date. The announcement says 11/18, but since
+  // 2d the prompt carries the schedule in ISO and the model now echoes that
+  // house style — "2026-11-18". The normalisation above has already turned
+  // the model's non-breaking hyphens into spaces, so the separator is
+  // whatever survived. Asserting on one spelling made a correct answer look
+  // like a failure; that has now happened twice, for two different reasons.
+  assert(/11\s*[/-]?\s*18|November\s+18/i.test(answer) && /BLOC\s*411/i.test(answer),
     "…using the announcement, which is in no reading");
 
   const feedMark = feeds.length;
   admin.send("admin", { action: "unpin", board: "announcements", id: pinned.id });
-  await waitUntil(() => feeds.slice(feedMark).some((f) => f.feeds.announcements.length === 0), 5000,
-    "the instructor can unpin it again — a typo in a due date must not be permanent");
+  // THIS item is gone — not "the feed is empty". boards.json is persisted and
+  // survives a server restart, so an empty-feed assertion silently depends on
+  // the disk being clean and fails after any run that pinned and did not
+  // unpin. Same order-dependency class as A1/A2.
+  await waitUntil(
+    () => feeds.slice(feedMark).some((f) => f.feeds.announcements.every((i: any) => i.id !== pinned.id)),
+    5000,
+    "the instructor can unpin it again — a typo in a due date must not be permanent"
+  );
+
+  // ---- step 2: the corpus, over HTTP ----
+  // Not a websocket step. The readings live with the TA on a port no browser
+  // can reach, so every one of these goes through the space's proxy — which
+  // is the only reason a student can open a reading at all.
+  console.log("\n9. The course corpus is served by the space, not by the TA");
+  const http = (URL.replace(/^ws/, "http") || "http://localhost:2567").replace(/\/+$/, "");
+  const list = (await (await fetch(`${http}/api/materials`)).json()) as {
+    readings: { id: string; title: string; format: string }[];
+  };
+  assert(list.readings.length > 0, `the shelf lists ${list.readings.length} reading(s)`);
+  const md = list.readings.find((r) => r.format === "md");
+  assert(!!md, "…at least one of them markdown");
+
+  const page = await fetch(`${http}/api/materials/${md!.id}/file`);
+  const html = await page.text();
+  assert(page.headers.get("content-type")?.includes("text/html"),
+    "a .md reading is served as HTML — a browser handed raw markdown shows source");
+  assert(html.includes("<title>") && html.includes(md!.title), "…titled with the reading");
+  assert(/<h[1-3]|<table|<p>/.test(html), "…and actually rendered, not escaped");
+
+  assert((await fetch(`${http}/api/materials/no-such-reading/file`)).status === 404,
+    "an id that is not in the manifest is a 404, not an error");
+
+  const agenda = (await (await fetch(`${http}/api/agenda`)).json()) as { rows: unknown[] };
+  assert(Array.isArray(agenda.rows), `the agenda proxies through (${agenda.rows.length} row(s))`);
+
+  console.log("\n10. Only the instructor can add course material");
+  // Deliberately no successful upload here: it would write to DATA_DIR and
+  // leave the next run a different corpus, which is the order-dependency this
+  // suite was cleaned of once already (plan, A1/A2). The write path is
+  // exercised by hand; what must not rot is the guard on it.
+  const asStudent = await fetch(`${http}/api/materials?as=ben@local&id=x&title=X&filename=x.md`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: "the deadline is next year",
+  });
+  assert(asStudent.status === 403,
+    "a student uploading a reading is refused — the TA cites every reading as authoritative");
+  const badType = await fetch(`${http}/api/materials?id=x&title=X&filename=x.exe`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: "MZ",
+  });
+  assert(badType.status === 400, "…and the instructor uploading a .exe is refused too");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();

@@ -119,6 +119,7 @@ async function main() {
   });
   admin.onMessage("notice", () => {});
   admin.onMessage("doors", () => {});
+  admin.onMessage("adminFeeds", () => {}); // the read-back feed (1d); registered to keep the log clean
   await wait(500);
   assert(world.entities.length === 7, "admin joined without adding an avatar");
 
