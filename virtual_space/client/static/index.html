@@ -71,6 +71,10 @@
   .shelf-item a { color: var(--ok); text-decoration: none; font-weight: 600; }
   .shelf-item a:hover { text-decoration: underline; }
   .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
+  /* Floated right so the title keeps the full row and long titles wrap under
+     it rather than pushing the save link off the card. */
+  .shelf-item .dl { float: right; color: var(--muted); font-weight: 700; text-decoration: none; padding: 0 2px; margin-left: 6px; }
+  .shelf-item .dl:hover { color: var(--ok); text-decoration: none; }
   .shelf-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
   #repos-wrap { display: none; border-bottom: 1px solid var(--line); }
   #repos-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }

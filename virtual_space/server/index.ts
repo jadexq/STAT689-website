@@ -114,6 +114,23 @@ app.get("/api/agenda", async (_req, res) => {
   }
 });
 
+// A filename for the Save dialog. The TA reports no filename — only an id, a
+// title and a format — so it is built from the title, which is the name the
+// student saw on the shelf and the one they will look for on disk.
+function downloadName(title: string, format: string, type: string): string {
+  const ext =
+    (format || "").replace(/^\./, "").toLowerCase() ||
+    (type.startsWith("text/markdown") ? "md" : type.includes("pdf") ? "pdf" : type.includes("html") ? "html" : "txt");
+  const stem =
+    title
+      .normalize("NFKD")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 80) || "course-material";
+  return `${stem}.${ext}`;
+}
+
 app.get("/api/materials/:id/file", async (req, res) => {
   try {
     const found = await taMaterialFile(String(req.params.id));
@@ -121,12 +138,35 @@ app.get("/api/materials/:id/file", async (req, res) => {
       res.status(404).type("text/plain").send("No such reading.");
       return;
     }
+    // ?download=1 means "give me the instructor's file", so it skips the
+    // markdown rendering below — a saved copy of the generated page would be
+    // the app's HTML, not the reading. Same route rather than a second one:
+    // one place decides what a reading is.
+    const wantsFile = req.query.download === "1";
+    const list = await taMaterials().catch(() => []);
+    const reading = list.find((r) => r.id === req.params.id);
+    const title = reading?.title ?? "Course reading";
+
+    if (wantsFile) {
+      const name = downloadName(title, reading?.format ?? "", found.type);
+      // The quotes matter: a title with a space is a truncated filename
+      // without them. escaped, because a title is instructor-supplied text.
+      res.setHeader("content-disposition", `attachment; filename="${name.replace(/"/g, "")}"`);
+      res.setHeader("content-type", found.type);
+      res.send(found.bytes);
+      return;
+    }
+
     // .md is rendered here; .html and .pdf are passed through untouched,
     // because for those two the file already IS the presentation.
     if (found.type.startsWith("text/markdown")) {
-      const list = await taMaterials().catch(() => []);
-      const title = list.find((r) => r.id === req.params.id)?.title ?? "Course reading";
-      res.type("html").send(renderMarkdownPage(title, found.bytes.toString("utf8")));
+      res.type("html").send(
+        renderMarkdownPage(
+          title,
+          found.bytes.toString("utf8"),
+          `/api/materials/${encodeURIComponent(String(req.params.id))}/file?download=1`
+        )
+      );
       return;
     }
     res.setHeader("content-type", found.type);

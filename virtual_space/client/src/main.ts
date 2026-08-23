@@ -664,6 +664,19 @@ async function renderShelf(show: boolean) {
   for (const r of readings) {
     const d = document.createElement("div");
     d.className = "shelf-item";
+    // Opening and keeping are different wants. The title opens the reading;
+    // this saves the instructor's original file. A separate control because
+    // ?download=1 bypasses the markdown rendering — clicking the title and
+    // then "save page as" would save the app's HTML instead. First in the
+    // DOM so the float holds the top-right corner and a title that wraps to
+    // two lines flows around it, rather than pushing it onto the second.
+    const dl = document.createElement("a");
+    dl.className = "dl";
+    dl.href = `/api/materials/${encodeURIComponent(r.id)}/file?download=1`;
+    dl.setAttribute("download", "");
+    dl.title = `Download ${r.title}`;
+    dl.textContent = "↓";
+    d.appendChild(dl);
     const a = document.createElement("a");
     // Served by the space, which renders .md to HTML on the way out — a
     // browser handed raw markdown shows source or offers a download.
