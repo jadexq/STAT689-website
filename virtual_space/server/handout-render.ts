@@ -1,61 +1,17 @@
 // The handout page: one student, one version per section, one page.
 //
 // Built on render.ts rather than beside it — same CSS, same table treatment,
-// same "opens in its own tab and must not depend on the campus bundle" rule.
-// What it adds is math, because the GPT chapter is nanoGPT and a handout that
-// cannot set an equation is not usable for it.
-//
-// Math goes through its OWN marked instance. render.ts's global `marked` is
-// what course readings use, and a reading that says "$5 and $10 in the same
-// line" must keep saying that rather than quietly becoming a formula. Two
-// instances, two dialects, no shared mutable options.
+// same "opens in its own tab and must not depend on the campus bundle" rule,
+// and since the math dialect moved there, the same equations too. Math was
+// this file's own for a while; readings needed it as well, and one renderer
+// is how the two pages keep agreeing about what "$" means.
 
-import katex from "katex";
-import { Marked, type TokenizerAndRendererExtension } from "marked";
-import { BASE_CSS, escapeHtml, wrapTables } from "./render";
+import { BASE_CSS, KATEX_CSS_LINK, escapeHtml, renderMathMarkdown } from "./render";
 import type { Bundle, Section } from "./handout-format";
 import type { Record_ } from "./handouts";
 import { TAGS, type HandoutSummary } from "./handouts";
 
-// throwOnError:false renders a malformed expression in red instead of taking
-// the whole page down. One typo in one formula must not blank a handout the
-// student is being asked to grade.
-function tex(src: string, displayMode: boolean): string {
-  return katex.renderToString(src, { displayMode, throwOnError: false, strict: false });
-}
-
-const mathBlock: TokenizerAndRendererExtension = {
-  name: "mathBlock",
-  level: "block",
-  start: (src) => src.indexOf("$$"),
-  tokenizer(src) {
-    const m = /^\$\$([\s\S]+?)\$\$(?:\n+|$)/.exec(src);
-    if (m) return { type: "mathBlock", raw: m[0], text: m[1].trim() };
-  },
-  renderer: (t) => `<div class="math-block">${tex(t.text, true)}</div>`,
-};
-
-const mathInline: TokenizerAndRendererExtension = {
-  name: "mathInline",
-  level: "inline",
-  start: (src) => src.indexOf("$"),
-  tokenizer(src) {
-    // No space just inside the delimiters, and no digit just after the closer,
-    // so "$5 and $10" and "costs $20." stay prose. Inline code is safe without
-    // help: the lexer consumes a backtick span whole before this ever sees the
-    // dollar inside it.
-    const m = /^\$(?![\s$])((?:\\.|[^$\\])+?)(?<![\s\\])\$(?!\d)/.exec(src);
-    if (m) return { type: "mathInline", raw: m[0], text: m[1] };
-  },
-  renderer: (t) => tex(t.text, false),
-};
-
-const md = new Marked({ gfm: true, breaks: false });
-md.use({ extensions: [mathBlock, mathInline] });
-
-export function renderHandoutMarkdown(markdown: string): string {
-  return wrapTables(md.parse(markdown, { async: false }) as string);
-}
+export const renderHandoutMarkdown = renderMathMarkdown;
 
 const HANDOUT_CSS = `
 /* The judgement widget. Visually a box the prose sits above, not a form the
@@ -112,8 +68,6 @@ const HANDOUT_CSS = `
   font-size: 13.5px; color: #8b96b3; font-style: italic;
   border-left: 3px solid #2a3145; padding-left: 12px; margin: 0 0 1.4em;
 }
-.math-block { overflow-x: auto; overflow-y: hidden; padding: 2px 0 6px; margin: 0 0 1.1em; }
-.katex { font-size: 1.04em; }
 .hfoot { color: #8b96b3; font-size: 13px; border-top: 1px solid #2a3145; padding-top: 18px; margin-top: 3em; }
 `;
 
@@ -307,7 +261,7 @@ export function renderHandoutPage(o: HandoutPageOpts): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(bundle.title)}</title>
-<link rel="stylesheet" href="/katex/katex.min.css">
+${KATEX_CSS_LINK}
 <style>${BASE_CSS}${HANDOUT_CSS}</style>
 ${o.head ?? ""}
 </head>

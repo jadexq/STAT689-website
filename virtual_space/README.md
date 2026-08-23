@@ -48,6 +48,16 @@ Then open **http://localhost:2567**.
   flow: instruct the TA → announce skill composes → editable preview → pin
   to a board. Students see the board when they walk in. Persistent
   (`data/boards.json`). There is no global broadcast anymore.
+- **📚 Course material:** the Library shelf lists the *TA's* own manifest,
+  proxied (the TA's port is not browser-reachable), so adding a reading puts
+  it on the shelf and in the TA's answers in one step. Clicking a title opens
+  it — `.md` is rendered to a page server-side, with LaTeX between `$…$` and
+  `$$…$$` typeset by KaTeX; `.html` and `.pdf` pass through. The **↓** beside
+  each title, and the download link on the rendered page, hand back the
+  instructor's original file: "save page as" on a rendered reading would save
+  the app's HTML instead, which is the whole reason the control exists.
+  Reading is open to every signed-in student; *uploading* is the
+  instructor's alone.
 - **🎤 Lecture mic** (admin, Chrome): streams your lecture to the TA's
   class-wide transcript for classroom Q&A.
 - **Dropped connections:** the server holds a seat — and the avatar,
