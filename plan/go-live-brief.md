@@ -47,11 +47,9 @@ Treat unverified filenames and script names in this brief as suspect until run.
 
 ---
 
-## 1. Push — BLOCKED TWICE, needs the user
-    git push -u origin multi-user-and-deploy-prep
-Denied by the auto-mode classifier (reported as a transient stage-2 error), twice. **Do not
-retry a third time unattended** — ask the user to run it, or re-attempt only if they have since
-applied the auto-mode config. Note the wizard's `--propose` output claimed "no remotes
+## 1. Push — DONE 2026-08-23 (`ca985c6..213aadb`)
+Blocked twice by the auto-mode classifier, then succeeded on a later attempt with the user
+present; the denial was transient, not a standing rule. Note the wizard's `--propose` output claimed "no remotes
 configured": it scanned the PARENT dir `/Users/jadewang/Documents/teaching/STAT689`, which is
 not a git repo. The repo and its `origin` live in `course_website/`. Anything in that proposal
 resting on "no remotes" is built on a wrong premise — say so before it gets applied.
@@ -62,7 +60,7 @@ The wipe took the old one. Regenerate — it is gitignored, so not in the image:
 Produces `fixtures/handout-sample.handout.json` (~12.7 KB). Upload via the admin panel as
 jadexqwang@gmail.com. Then grade at least one section as Tester so check 5 has a row.
 
-## 3. Stage 7 checks still open (§15i of gcp-deployment-plan.md) — ALL need a signed-in browser
+## 3. Stage 7 checks (§15i of gcp-deployment-plan.md) — 4, 5, 6 need a signed-in browser; 9 is done
   4. **Maths renders**, not raw `$…$`. CANNOT BE TESTED VIA A READING AS THINGS STAND: the
      corpus is `agenda.md` + `attention-intro.md`, and **neither contains a single `$`**. The
      handout fixture is where the math is (`fixtures/handout-sample/sections/qkv.*.md`), so
@@ -73,12 +71,16 @@ jadexqwang@gmail.com. Then grade at least one section as Tester so check 5 has a
   6. **Durability across a restart.** Let it scale to zero (~15 min idle), sign back in,
      confirm the graded record survived. The ONLY test of whether handout responses are durable.
      Cheaper than a redeploy and also exercises the SIGTERM final flush.
-  9. **Idle out of the TA office → land in your OWN office** (E8). Needs the short windows, so
-     it is really a local-suite check. **There is no `test:idle` npm script** — virtual_space
-     has only `build:client`, `dev`, `start`, `bundle:handout`. Run it as:
+  9. **PASSED 2026-08-23** — idle out of the TA office lands you in your OWN office (E8).
+     Running it exposed that the step-3 assertion could not prove E8 (Ana has no slot, so her
+     "own room" is the commons); `59ff49d` adds step 6, which puts a *rostered* student in the
+     TA office and confirms `office-s6`. That is the call site E8 fixed. Re-run with:
          SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10 npm run dev     # server, port 2567
-         IDLE_TEST_STUDENT=jadewang@tamu.edu npx tsx scripts/idle-test.ts
-     (`npm run test:materials` DOES exist, but it is a **virtual_ta** script, not this one.)
+         SOLO_IDLE_S=8 IDLE_TEST_STUDENT=jadewang@tamu.edu npx tsx scripts/idle-test.ts
+     **There is no `test:idle` npm script** — virtual_space has only `build:client`, `dev`,
+     `start`, `bundle:handout`. (`npm run test:materials` exists, but in **virtual_ta**.)
+     Restart the space server between runs; the suite is not idempotent inside the 2-min
+     reconnect window.
 Check 2's visible half (office labelled with the student's name) can be folded into any of these.
 I cannot drive these: the `iap-probe` service account was deleted at teardown 2026-08-22, so
 there is no programmatic path through IAP. Offer Claude-in-Chrome against the user's signed-in
