@@ -15,6 +15,7 @@ import { identify, identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
 import { taAgenda, taMaterialFile, taMaterials, taUpload } from "./ta";
 import { renderMarkdownPage } from "./render";
+import { saltState, saveBundle, validateBundle, type Bundle } from "./handouts";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -22,6 +23,12 @@ const app = express();
 // gzip before static: the Phaser bundle is ~1.2 MB minified and ~0.34 MB
 // gzipped, and Cloud Run's free tier allows only 1 GiB of egress a month.
 app.use(compression());
+// Handout bundles are the one large JSON body this server takes: six versions
+// of five sections is a couple of hundred kilobytes, well past body-parser's
+// 100 kB default. It has to be registered BEFORE the global parser — the first
+// parser to run sets req._body and every later one returns early, so a bigger
+// limit declared on the route itself would never be reached.
+app.use("/api/handouts", express.json({ limit: "8mb" }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "client", "static")));
 
@@ -135,6 +142,62 @@ app.post("/api/materials", express.raw({ type: "*/*", limit: "20mb" }), async (r
   }
 });
 
+// ---------- feedback handouts ----------
+// The instructor writes handouts outside the app and uploads one bundle each.
+// This is the second write on the browser-reachable side after 2e's reading
+// upload, and it carries the same guard for the same reason — except that a
+// handout is also the thing students are graded against, so a forged one is
+// worse than a forged reading.
+
+app.post("/api/handouts", async (req, res) => {
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
+  }
+  if (!who.isAdmin) {
+    logEvent("handout_upload_denied", { email: who.email });
+    res.status(403).json({ ok: false, note: "Only the instructor can add a handout." });
+    return;
+  }
+  const salt = saltState();
+  if (!salt.ok) {
+    res.status(503).json({ ok: false, note: salt.note });
+    return;
+  }
+  try {
+    const bundle = req.body as Bundle;
+    // Validated here and not only in the bundler: a bundle hand-edited after
+    // bundling must not get in through the back door.
+    const problems = validateBundle(bundle);
+    if (problems.length) {
+      res.status(400).json({ ok: false, note: "That bundle is not valid.", problems });
+      return;
+    }
+    await saveBundle(bundle);
+    logEvent("handout_upload", {
+      by: who.email,
+      id: bundle.handout_id,
+      sections: bundle.sections.length,
+      versions: bundle.versions.length,
+    });
+    // Re-uploading the same handout_id replaces the content and leaves the
+    // responses in place. That is deliberate — it is how a typo gets fixed —
+    // and it is exactly why every record carries a content hash.
+    res.json({
+      ok: true,
+      handout_id: bundle.handout_id,
+      sections: bundle.sections.length,
+      versions: bundle.versions.length,
+    });
+  } catch (err) {
+    console.error(`[space] handout upload: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, note: "Could not store that handout." });
+  }
+});
+
 const httpServer = createServer(app);
 const gameServer = new Server({
   transport: new WebSocketTransport({ server: httpServer }),
@@ -146,6 +209,7 @@ httpServer.listen(PORT, () => {
   console.log(`Session log: ${logFilePath()}`);
   console.log(`Auth: ${identityMode()}`);
   console.log(`Roster: ${rosterSummary()}`);
+  console.log(`Handouts: ${saltState().note}`);
   warmIapKeys(); // fetch IAP's signing keys now, not on the first student
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });

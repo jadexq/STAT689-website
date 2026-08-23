@@ -1,0 +1,8 @@
+{
+  "handout_id": "bad-title-drift",
+  "title": "Deliberately broken: title-drift",
+  "chapter": "GPT",
+  "term": "2026F",
+  "versions": ["A","B"],
+  "sections": ["intro"]
+}

@@ -12,3 +12,7 @@ client/static/bundle.js
 # Local logs / trajectory data
 data/
 *.jsonl
+
+# Emitted by npm run bundle:handout — the fixture SOURCE is tracked, the
+# build output is not.
+fixtures/*.handout.json
