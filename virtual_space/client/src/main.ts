@@ -57,6 +57,14 @@ type InitMsg = {
 const params = new URLSearchParams(location.search);
 // Local multi-user testing: ?as=ben@local. Ignored by the server behind IAP.
 const DEV_AS = params.get("as") || "";
+// Every HTTP call that depends on WHO is asking has to carry ?as= too. The
+// websocket gets it through devUser; fetch does not, and the Library shelf and
+// repo cards never needed it because they are the same list for everyone.
+// Handouts are not: without this, opening one while pretending to be a student
+// identifies as the dev user — who is the admin — and silently shows the
+// instructor's preview instead of that student's version. Empty behind IAP,
+// where identify() ignores it anyway.
+const AS_Q = DEV_AS ? `?as=${encodeURIComponent(DEV_AS)}` : "";
 // What we actually ARE — filled in from init, so it cannot be faked here.
 let role: "student" | "admin" = "student";
 
@@ -730,7 +738,7 @@ async function renderHandouts(show: boolean) {
   const list = $<HTMLDivElement>("handouts");
   let data: { handouts?: HandoutCard[]; note?: string };
   try {
-    data = (await (await fetch("/api/handouts")).json()) as { handouts?: HandoutCard[]; note?: string };
+    data = (await (await fetch(`/api/handouts${AS_Q}`)).json()) as { handouts?: HandoutCard[]; note?: string };
   } catch {
     data = {};
   }
@@ -753,7 +761,7 @@ async function renderHandouts(show: boolean) {
     const d = document.createElement("div");
     d.className = "handout-item";
     const a = document.createElement("a");
-    a.href = `/handout/${encodeURIComponent(h.id)}`;
+    a.href = `/handout/${encodeURIComponent(h.id)}${AS_Q}`;
     a.target = "_blank";
     a.rel = "noopener";
     a.textContent = h.title;
@@ -939,7 +947,7 @@ function wirePanel() {
     const box = $<HTMLDivElement>("hadmin-list");
     let handouts: HandoutCard[] = [];
     try {
-      handouts = ((await (await fetch("/api/handouts")).json()) as { handouts?: HandoutCard[] }).handouts ?? [];
+      handouts = ((await (await fetch(`/api/handouts${AS_Q}`)).json()) as { handouts?: HandoutCard[] }).handouts ?? [];
     } catch {
       /* leave the list as it was rather than blanking it on one bad fetch */
       return;
@@ -958,9 +966,9 @@ function wirePanel() {
       const id = encodeURIComponent(h.id);
       d.innerHTML =
         `<b>${escapeHtml(h.title)}</b>` +
-        `<a href="/handout/${id}" target="_blank" rel="noopener">preview</a>` +
-        `<a href="/admin/handouts/${id}" target="_blank" rel="noopener">feedback</a>` +
-        `${escapeHtml(h.chapter)} · ${h.sections} sections`;
+        `<a href="/handout/${id}${AS_Q}" target="_blank" rel="noopener">preview</a>` +
+        `<a href="/admin/handouts/${id}${AS_Q}" target="_blank" rel="noopener">feedback</a>` +
+        `<span>${escapeHtml(h.chapter)} · ${h.sections} sections</span>`;
       box.appendChild(d);
     }
   }
@@ -972,7 +980,7 @@ function wirePanel() {
     if (!file) return setAdminStatus("Pick a .handout.json bundle first.", false);
     setAdminStatus(`Uploading ${file.name}…`, true);
     try {
-      const res = await fetch("/api/handouts", {
+      const res = await fetch(`/api/handouts${AS_Q}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: await file.text(),
