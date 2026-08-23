@@ -48,11 +48,37 @@ function wait(ms: number) {
 const children: ChildProcess[] = [];
 const dirs: string[] = [];
 
-function startServer(port: number, env: Record<string, string>): ChildProcess {
-  const data = mkdtempSync(path.join(tmpdir(), "handout-test-"));
-  dirs.push(data);
-  const child = spawn("npx", ["tsx", "server/index.ts"], {
+/**
+ * Refuse to run against somebody else's server.
+ *
+ * Without this the suite is not order-independent, and it found that out the
+ * hard way: a run that fails mid-way leaves a server on the port, the next run
+ * connects to it, and every assertion is then made against the PREVIOUS run's
+ * data. It reported "one record so far" against six. Hence both halves of the
+ * fix — this check, and killing the process GROUP below.
+ */
+async function requireFreePort(port: number) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/repos`, { signal: AbortSignal.timeout(1500) });
+  } catch {
+    return; // nothing listening, which is what we want
+  }
+  throw new Error(
+    `Something is already listening on :${port}. This suite must own its server — a leftover one ` +
+      `from an earlier run would answer with that run's data. Kill it (lsof -ti :${port} | xargs kill -9) ` +
+      `or set HANDOUT_TEST_PORT.`
+  );
+}
+
+function startServer(port: number, env: Record<string, string>, dataDir?: string): ChildProcess {
+  const data = dataDir ?? mkdtempSync(path.join(tmpdir(), "handout-test-"));
+  if (!dataDir) dirs.push(data);
+  // The local tsx binary rather than `npx tsx`: one less process between us and
+  // the server, and detached so the whole group can be killed at once. Killing
+  // npx alone leaves the server it spawned holding the port.
+  const child = spawn(path.join(ROOT, "node_modules", ".bin", "tsx"), ["server/index.ts"], {
     cwd: ROOT,
+    detached: true,
     env: {
       ...process.env,
       PORT: String(port),
@@ -91,7 +117,15 @@ async function waitForPort(port: number, child: ChildProcess, label: string) {
 }
 
 function cleanup() {
-  for (const c of children) c.kill("SIGKILL");
+  for (const c of children) {
+    // Negative pid = the whole process group. See requireFreePort.
+    try {
+      if (c.pid) process.kill(-c.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    c.kill("SIGKILL");
+  }
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 }
 
@@ -170,6 +204,7 @@ function bundler(dir: string): Promise<{ code: number; out: string }> {
 
 async function main() {
   console.log(`Starting a private space on :${PORT} …`);
+  for (const p of [PORT, IAP_PORT, PORT + 2]) await requireFreePort(p);
   const server = startServer(PORT, {});
   await waitForPort(PORT, server, "space");
 
@@ -461,6 +496,55 @@ async function main() {
     String(stranger.note).includes("not on the class roster"),
     "someone off the roster is told why, in the Common Area where they land"
   );
+
+  // ---- 11b. the dashboard: who is missing, and who said what ----
+  console.log("\n11b. The dashboard names absences, and names opinions only on request");
+  const blind = await (await fetch(`${H}/admin/handouts/${six.handout_id}?as=${ADMIN}`)).text();
+  assert(blind.includes("not anonymous to you"), "the default view says plainly that this is not anonymous to the instructor");
+  assert(blind.includes("show names"), "…and offers names rather than hiding that it can");
+  assert(!/class="name"/.test(blind), "…while showing none by default, so the writing is judged blind");
+  // s5@test and s6@test have graded nothing; s1..s4 have.
+  assert(
+    /Not answered at all:[\s\S]*?Grace/.test(blind) && /Not answered at all:[\s\S]*?Jade/.test(blind),
+    "…and names the students who have answered nothing — identity in the negative, attached to no opinion"
+  );
+  assert(
+    blind.includes("of 6 on the roster") && /<b>4<\/b> of 6 answered/.test(blind),
+    "the denominator is the six assigned slots, not every slot on the map"
+  );
+  const named = await (await fetch(`${H}/admin/handouts/${six.handout_id}?names=1&as=${ADMIN}`)).text();
+  assert(named.includes("Names are showing"), "?names=1 says so rather than changing quietly");
+  assert(/class="name">Sam</.test(named), "…and puts the roster name beside the grade");
+
+  // ---- 11c. a changed salt fails loudly rather than orphaning the data ----
+  console.log("\n11c. A changed salt stops, rather than silently orphaning a term of work");
+  const M = `http://127.0.0.1:${PORT + 2}`;
+  // Same tree, same salt: the fingerprint agrees and nothing changes.
+  const same = startServer(PORT + 2, {}, dirs[0]);
+  await waitForPort(PORT + 2, same, "same-salt space");
+  assert((await fetch(`${M}/api/handouts`)).ok, "restarting on the same data with the same salt is fine");
+  process.kill(-same.pid!, "SIGKILL");
+  await wait(700);
+
+  // Same tree, different salt: every hash would move, so it stops instead.
+  const moved = startServer(PORT + 2, { HANDOUT_SALT: "a-different-salt" }, dirs[0]);
+  await waitForPort(PORT + 2, moved, "moved-salt space");
+  const movedRes = await fetch(`${M}/api/handouts`);
+  assert(movedRes.status === 503, "changing the salt under existing responses stops the routes");
+  assert(
+    String(((await movedRes.json()) as any).note).includes("does not match"),
+    "…and says so, rather than reporting a term of collected grades as simply gone"
+  );
+  process.kill(-moved.pid!, "SIGKILL");
+  await wait(700);
+
+  // A fresh tree with the new salt is still fine — the guard is about data
+  // that exists, not about the salt having ever been different.
+  const fresh = startServer(PORT + 2, { HANDOUT_SALT: "a-different-salt" });
+  await waitForPort(PORT + 2, fresh, "fresh-salt space");
+  assert((await fetch(`${M}/api/handouts`)).ok, "a new salt on an empty tree is fine — nothing exists to orphan");
+  process.kill(-fresh.pid!, "SIGKILL");
+  await wait(700);
 
   // ---- 12. failing closed without a salt ----
   console.log("\n12. No salt behind IAP: handouts stop, the campus does not");

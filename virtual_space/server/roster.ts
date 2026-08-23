@@ -81,6 +81,19 @@ for (const [email, id] of ASSIGNED) {
 const BY_EMAIL = new Map<string, Slot>();
 for (const [email, id] of ASSIGNED) BY_EMAIL.set(email, SLOTS.find((s) => s.id === id)!);
 
+// The slots that belong to a real person, in roster order. A slot with no
+// address is a character played by an AI, not a student who has not answered —
+// which is why this, and not SLOTS.length, is the denominator of a response
+// rate.
+export function assignedStudents(): { slot: Slot; email: string }[] {
+  const out: { slot: Slot; email: string }[] = [];
+  for (const slot of SLOTS) {
+    const email = emailOf(slot.id);
+    if (email) out.push({ slot, email });
+  }
+  return out;
+}
+
 export function slotFor(email: string): Slot | undefined {
   return BY_EMAIL.get(email.trim().toLowerCase());
 }

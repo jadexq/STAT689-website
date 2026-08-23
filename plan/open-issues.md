@@ -414,33 +414,50 @@ Recorded so they are not rediscovered as if they were new problems.
 - **Resolved when:** either the wipe is done before the first class, or a student has used the
   space and the item is deliberately closed unexecuted.
 
-### D8. `HANDOUT_SALT` is not set in Cloud Run, and must never change once it is
-- [ ] **Open. Blocks the first handout. Two failure modes, one of them silent.**
+### D8. `HANDOUT_SALT` is not set in Cloud Run
+- [ ] **Open. Blocks the first handout. One command, then write the value down.**
 - Student feedback is keyed by `sha256(HANDOUT_SALT + email)`. Behind IAP with no salt set, every
-  handout route answers **503** and says why, and the rest of the campus is unaffected — that
-  much is loud, asserted by `handout-test.ts`, and easy to fix.
-- **The silent one is changing the salt after data exists.** Every hash changes, so every student
-  silently loses their recorded version assignment *and* every record already collected becomes
-  an orphan under a hash nobody holds any more. Nothing errors. The dashboard simply shows fewer
-  responses than there were last week.
-- So: set it once, before the first handout, in the Cloud Run env; never rotate it; and if it
-  ever must be rotated, migrate the response filenames in the same operation.
-- It is a secret in the sense that matters — anyone holding it and the roster can invert the six
-  hashes — so it belongs in the deploy env, not in git, and it is never part of an export.
+  handout route answers **503** and says why, and the rest of the campus is unaffected.
+
+  ```bash
+  openssl rand -hex 24
+  ```
+
+  Put it in the Cloud Run env (the runbook's stage-2 command now carries it), and keep the value
+  with the other secrets. It must contain no `~`, which is the `--set-env-vars` delimiter.
+- **What the salt actually buys, stated honestly.** It protects an *exported* JSONL from someone
+  who has the file but not the roster — a co-author, a reviewer, a repository. That is real and
+  worth having. It protects **nothing from the instructor**, who holds both, and it protects
+  nothing structurally either: with one reader per version, `version_id` identifies the student
+  within a section, and the rotation is arithmetic anyone with the roster order can redo. So the
+  dashboard now says that in plain words rather than implying an anonymity that does not exist,
+  and offers `?names=1` instead of pretending it cannot.
+- **Changing the salt after data exists used to be the dangerous half — it no longer is.** Every
+  hash moves, so every recorded version assignment and every collected grade becomes an orphan
+  under a hash nobody holds. `b39...` writes a `.salt-fingerprint` beside the responses when the
+  first one is created and refuses to serve handouts if the running salt disagrees with it. The
+  failure is now a 503 naming the fix instead of a dashboard quietly showing fewer responses than
+  last week. Restoring the old value is still the only real recovery.
 - Locally a fixed dev salt stands in and the boot line says so, which is what lets the suite run.
 
-### D9. Whether the handout feedback is intended for publication — an IRB deadline, not a build one
-- [ ] **Open. Unanswered after being raised four times. The deadline arrives with the first
-      handout, not with the first paper.**
-- If a paper, a talk, or a post with aggregate numbers is possible, collecting student judgements
-  is human-subjects research and TAMU's IRB must see it **before** collection. An exemption for
-  classroom educational research is routine and cannot be applied retroactively.
-- If it is purely for improving the course, it is ordinary teaching practice and no IRB is
-  involved.
-- Nothing in the build changes either way — which is exactly why this is easy to keep postponing.
-- Related, and true regardless: the hash gives students deniability against a casual reader of the
-  dataset, not against the instructor, who holds the salt. Saying so plainly in week 1 is better
-  than implying an anonymity that does not exist.
+### D9. IRB — deferred by the instructor, 2026-08-23. Revisit only if publication is considered
+- [x] **Decided: not being handled now.** Recorded rather than closed, because the decision has a
+      condition attached and the condition can change quietly.
+- **The rule, so the trigger is unambiguous.** Collecting student judgements *for teaching* is
+  ordinary classroom practice and involves no IRB. It becomes human-subjects research the moment
+  the results are aimed at an audience outside the course — a paper, a talk, a blog post, a
+  workshop submission, a figure in someone else's grant. An exemption for classroom educational
+  research is routine to obtain and **cannot be applied retroactively**, so the deadline is the
+  first *collection*, not the first draft.
+- **Therefore:** if a paper ever starts to look possible, stop and talk to TAMU's IRB *before*
+  the next handout goes out — not before the writing starts. Data already collected without
+  approval generally cannot be rescued into a publication.
+- Nothing in the build depends on this either way, which is exactly why it is easy to drift past.
+- **True regardless of the IRB question, and worth one sentence in week 1:** the feedback is
+  attributed. The hash gives students deniability against a casual reader of an exported file,
+  not against the instructor, and the version rotation makes attribution inferable anyway (see
+  D8). Saying so plainly is better than implying an anonymity that does not exist — and with six
+  PhD students who already know they are being read, it costs less candour than pretending would.
 
 ---
 
@@ -620,7 +637,12 @@ time-limited — see the note there), **A1**/**A2** (pre-existing test failures)
 the deployed app: **E1** (TA cannot post to the Library board).
 
 **2026-08-23, step 4 (feedback handouts):** three new entries, all prerequisites rather than
-defects — **D8** (`HANDOUT_SALT` unset, and the trap in ever changing it), **D9** (the IRB
-question, whose deadline is the first handout), **E7** (no way to withdraw a handout). **D5b**
-gained a consequence: without a `STUDENTS` slot a student is now refused handouts outright
-rather than merely spawning in the wrong room.
+defects — **D8** (`HANDOUT_SALT` unset), **D9** (IRB), **E7** (no way to withdraw a handout).
+**D5b** gained a consequence: without a `STUDENTS` slot a student is now refused handouts
+outright rather than merely spawning in the wrong room.
+
+**2026-08-23, later the same day:** **D9 closed by decision** — the instructor is not handling
+IRB now; it reopens only if publication is considered, and the note there says exactly what would
+trigger that. **D8** lost its dangerous half: a `.salt-fingerprint` beside the responses turns a
+changed salt from a silent orphaning into a 503 that names the fix. What remains of D8 is one
+`openssl rand -hex 24` at deploy time.

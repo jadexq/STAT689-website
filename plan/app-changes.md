@@ -79,6 +79,13 @@ generates them.
    Dockerfile's `npm prune --omit=dev` leaves it in place, and `express.static` over its `dist`
    keeps a megabyte of woff2 out of git.
 
+**And one found after shipping, by the suite failing in the way it warns other suites about.**
+`handout-test.ts` killed `npx` rather than the process *group*, so a run that failed mid-way left
+its server holding the port; the next run connected to it and made every assertion against the
+previous run's data. It reported "one record so far" against six. Fixed by spawning the local
+`tsx` binary detached, killing the group, and refusing to start at all if the port already
+answers — the A1/A2 rule turned on the suite that invoked it.
+
 Two smaller decisions taken while building, recorded because they are not obvious from the code:
 the panel keys on `init.home` rather than on "their own office", so someone not yet on the roster
 — who has no office and lands in the Common Area — still finds out why their links will not open;
@@ -393,15 +400,45 @@ than by omission — if the instructor later wants observed rather than derived 
 additive commit and the record schema already has room for it. And the deploy, which this depends
 on rather than includes.
 
-### The question still open
+### The question that was open, and how it was answered
 
-**Whether any of this is intended for publication.** If a paper, a talk, or a post with aggregate
-numbers is possible, this is human-subjects research and TAMU's IRB must see it *before*
-collection — an exemption for classroom educational research is routine, but cannot be applied
-retroactively. If it is purely for improving the course, it is ordinary teaching practice and no
-IRB is involved. The build does not change either way; the deadline does, and it arrives when the
-first handout does. Now tracked as **D9** in [`open-issues.md`](./open-issues.md), because the
-build being done makes it the only thing left standing between here and collecting data.
+**Whether any of this is intended for publication — deferred, 2026-08-23.** The instructor is not
+handling IRB now. Recorded rather than dropped, with the trigger written down in **D9** of
+[`open-issues.md`](./open-issues.md): collecting judgements *for teaching* is ordinary classroom
+practice and involves no IRB, and it becomes human-subjects research the moment the results are
+aimed outside the course. The exemption is routine to obtain and cannot be applied retroactively,
+so the deadline is the first *collection*, not the first draft — which is why the condition is
+worth keeping visible even while the answer is "not now".
+
+### On attribution, decided the same day
+
+Asked whether the instructor should see which student said what. The honest answer turned out to
+be that **the design already makes it visible**, and the code was implying otherwise.
+
+At one reader per version, `version_id` *is* a student id within a section: the dashboard shows
+the version beside every grade, and `(studentIndex + sectionIndex) % versions.length` is
+arithmetic anyone holding the roster order can redo. The salted hash therefore protects an
+exported file from someone who lacks the roster — real, and worth keeping — and protects nothing
+from the person reading the dashboard. Labelling rows with a hash while the version column gives
+the game away is not privacy; it is a false signal to whoever reads this code next.
+
+So, three changes rather than one:
+
+1. **The dashboard says it plainly** — "not anonymous to you", with the reason — and offers
+   `?names=1` instead of pretending it cannot.
+2. **Names stay off by default**, for a different reason than privacy: judging the writing goes
+   better when you do not know whose reaction you are reading. That is a reading discipline, not
+   a protection, and the banner says which it is.
+3. **Absences are named outright.** "Not answered at all: Grace, Jade" — chasing a non-responder
+   needs a name and attaches it to no opinion, and response being required is what makes the
+   whole design viable (consequence 4). The denominator is now the *assigned* slots rather than
+   `SLOTS.length`; a slot with no address is a character played by an AI, not a student who has
+   not answered.
+
+The corresponding thing to say to students in week 1 is one sentence: the feedback is attributed,
+the instructor can see who wrote what and will not go looking, and they will see who has not
+answered. With six PhD students who already know they are being read, that costs less candour
+than implying an anonymity that does not exist.
 
 ---
 

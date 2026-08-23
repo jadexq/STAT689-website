@@ -29,7 +29,7 @@ import fs from "fs/promises";
 import path from "path";
 import { DATA_DIR } from "./paths";
 import type { Bundle, Generation } from "./handout-format";
-import { SLOTS, slotFor } from "./roster";
+import { SLOTS, assignedStudents, slotFor } from "./roster";
 
 export * from "./handout-format";
 
@@ -55,6 +55,46 @@ export function saltState(): { ok: boolean; note: string } {
     };
   }
   return { ok: true, note: `DEV salt in use (${DEV_SALT}) — set HANDOUT_SALT before deploying` };
+}
+
+// A salt that CHANGES after data exists is worse than one that is missing:
+// every hash moves, so every student silently loses their recorded version
+// assignment and every record already collected becomes an orphan under a
+// hash nobody holds any more. Nothing errors; the dashboard just shows fewer
+// responses than it did last week.
+//
+// So the first response file written also stamps a fingerprint of the salt
+// beside it, and every handout route checks it. A changed salt then fails the
+// way a missing one does — loudly, with the fix named — instead of quietly
+// deleting a term of work. See open-issues D8.
+function saltFingerprint(): string {
+  const salt = SALT || (TRUST_IAP ? "" : DEV_SALT);
+  return createHash("sha256").update(`fingerprint:${salt}`, "utf8").digest("hex").slice(0, 16);
+}
+
+let guardOnce: Promise<{ ok: boolean; note: string }> | null = null;
+
+/** saltState(), plus "and it is the same salt the existing data was written under". */
+export function saltGuard(): Promise<{ ok: boolean; note: string }> {
+  if (guardOnce) return guardOnce;
+  guardOnce = (async () => {
+    const base = saltState();
+    if (!base.ok) return base;
+    const seen = (await fs.readFile(FINGERPRINT_FILE, "utf8").catch(() => null))?.trim();
+    // No fingerprint means no responses have ever been written here, so there
+    // is nothing yet to orphan and changing the salt is still free.
+    if (!seen || seen === saltFingerprint()) return base;
+    return {
+      ok: false,
+      note:
+        "HANDOUT_SALT does not match the salt the existing responses were written under. " +
+        "Handout routes are disabled rather than silently orphaning them: every student_hash " +
+        "would change, so every recorded version assignment and every collected grade would " +
+        "become unreachable. Restore the previous salt, or migrate the files under " +
+        "DATA_DIR/space/handouts/responses/ to the new hashes and delete .salt-fingerprint.",
+    };
+  })();
+  return guardOnce;
 }
 
 export function studentHash(email: string): string {
@@ -85,6 +125,7 @@ export function studentIndex(email: string): number | undefined {
 
 const HANDOUT_DIR = path.join(DATA_DIR, "handouts");
 const RESPONSE_DIR = path.join(HANDOUT_DIR, "responses");
+const FINGERPRINT_FILE = path.join(HANDOUT_DIR, ".salt-fingerprint");
 
 function bundlePath(id: string): string {
   return path.join(HANDOUT_DIR, `${id}.handout.json`);
@@ -239,6 +280,10 @@ export async function updateStudentFile(
     const next = mutate(current);
     if (!next) return current;
     await writeJson(file, next);
+    // wx: written exactly once, by whoever creates the first response.
+    await fs
+      .writeFile(FINGERPRINT_FILE, `${saltFingerprint()}\n`, { flag: "wx" })
+      .catch(() => {});
     return next;
   });
 }
@@ -447,8 +492,10 @@ export interface SectionSummary {
     tags: string[];
     comment: string;
     /** First 8 hex of the salted hash: enough to notice one rater who grades
-     *  everything harshly, not a view organised around people. */
+     *  everything harshly, without organising the view around people. */
     who: string;
+    /** The roster name, only when the caller asked for names. See renderDashboard. */
+    name?: string;
     /** False once the instructor has edited this version since it was graded. */
     current: boolean;
   }[];
@@ -456,14 +503,25 @@ export interface SectionSummary {
 
 export interface HandoutSummary {
   bundle: Bundle;
-  /** Everyone on the roster is expected to answer; that is the denominator. */
+  /** Slots that belong to a real person. NOT SLOTS.length — a slot with no
+   *  address is a character played by an AI, not a student who has not
+   *  answered, and counting it makes every response rate look worse than it is. */
   cohort: number;
+  /** Roster names with no records at all for this handout. Identity in the
+   *  NEGATIVE: chasing a non-responder needs a name, and it attaches that name
+   *  to no opinion. */
+  notAnswered: string[];
+  /** True when ?names=1 was asked for — the view says so, rather than the
+   *  reader having to notice. */
+  named: boolean;
   sections: SectionSummary[];
 }
 
-export async function summarise(bundle: Bundle): Promise<HandoutSummary> {
+export async function summarise(bundle: Bundle, named = false): Promise<HandoutSummary> {
   const files = await listStudentFiles(bundle.handout_id);
   const sections: SectionSummary[] = [];
+  const roster = assignedStudents();
+  const nameByHash = new Map(roster.map(({ slot, email }) => [studentHash(email), slot.name]));
 
   for (const s of bundle.sections) {
     const rows: SectionSummary["rows"] = [];
@@ -487,6 +545,7 @@ export async function summarise(bundle: Bundle): Promise<HandoutSummary> {
         tags: r.tags,
         comment: r.comment,
         who: r.student_hash.slice(0, 8),
+        ...(named ? { name: nameByHash.get(r.student_hash) ?? "off-roster" } : {}),
         current: s.bodies[r.version_id]?.content_sha === r.content_sha,
       });
     }
@@ -505,7 +564,11 @@ export async function summarise(bundle: Bundle): Promise<HandoutSummary> {
     });
   }
   sections.sort((a, b) => (a.mean ?? 99) - (b.mean ?? 99));
-  return { bundle, cohort: SLOTS.length, sections };
+
+  const answered = new Set(files.filter((f) => Object.keys(f.records).length).map((f) => f.student_hash));
+  const notAnswered = roster.filter(({ email }) => !answered.has(studentHash(email))).map(({ slot }) => slot.name);
+
+  return { bundle, cohort: roster.length, notAnswered, named, sections };
 }
 
 /** Every stored record, newest handout schema, one object per graded section. */

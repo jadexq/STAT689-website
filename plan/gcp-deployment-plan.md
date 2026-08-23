@@ -333,7 +333,7 @@ gcloud run deploy stat689 \
   --timeout=3600 --memory=1Gi \
   --no-allow-unauthenticated --iap \
   --set-secrets=OLLAMA_API_KEY=ollama-key:latest \
-  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~STUDENTS=jadewang@gmail.com=jade~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
+  --set-env-vars='^~^TRUST_IAP_HEADER=1~IAP_JWT_AUDIENCE=/projects/343454961473/locations/us-central1/services/stat689~ADMIN_EMAILS=jadexqwang@gmail.com~STUDENTS=jadewang@gmail.com=jade~HANDOUT_SALT=<generate once, see below>~SNAPSHOT_URI=gs://stat689-data/state~LLM_PROVIDER=ollama~OLLAMA_BASE_URL=https://ollama.com/v1~OLLAMA_MODEL=gpt-oss:120b'
 ```
 
 > ### ⚠ `STUDENTS` and the IAP grant are a PAIR — one without the other looks like a bug
@@ -361,6 +361,13 @@ Why each flag that is not obvious:
   is fine — gcloud splits a `KEY=VALUE` pair on the *first* `=` only. Slots are `s1`…`s5` and
   `jade`. Assigning a slot **removes its AI stand-in**: that office belongs to a person now.
 
+- **`HANDOUT_SALT`** salts the student hash on every feedback record. Generate it once with
+  `openssl rand -hex 24`, **write it down with the other secrets**, and never change it. Without
+  it the handout routes answer 503 (deliberately — an unsalted hash over six known addresses is
+  a lookup table). Changing it after students have answered would move every hash and orphan
+  every recorded version assignment and every grade; the app now refuses to serve handouts when
+  the salt disagrees with the data on disk, but only the old value actually recovers it. It must
+  contain no `~`, or it will break the alternate delimiter below. See open-issues **D8**.
 - **`--max-instances=1`** is correctness, not cost. Colyseus room state lives in one instance's
   RAM; a second instance scatters reconnecting students and breaks rooms silently.
 - **`--timeout=3600`** is the maximum. B3 proved the cut is wall-clock and unavoidable, so this

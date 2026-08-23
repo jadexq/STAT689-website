@@ -355,7 +355,16 @@ const DASH_CSS = `
 .vrow blockquote { margin: 7px 0 2px; border-left: 3px solid #4a3f77; padding: 0 0 0 12px; color: #dfe6f5; font-size: 14px; }
 .tagsum { font-size: 12.5px; color: #8b96b3; margin: 12px 0 0; border-top: 1px solid #232a3d; padding-top: 10px; }
 .tagsum b { color: #ffb3c0; }
-.exports { font-size: 13px; margin: 0 0 26px; }
+.exports { font-size: 13px; margin: 0 0 14px; }
+.attrib {
+  font-size: 12.5px; color: #8b96b3; border: 1px solid #2a3145; border-radius: 10px;
+  background: #141828; padding: 10px 13px; margin: 0 0 22px; line-height: 1.5;
+}
+.attrib b { color: #dfe6f5; }
+.attrib.on { border-color: #5a4a22; background: #2a2416; color: #f0d9a0; }
+.attrib.on b { color: #fff; }
+.missing { color: #ffb3c0; }
+.vrow .name { font-weight: 700; margin-left: 8px; color: #f0d9a0; }
 .exports a { margin-right: 14px; }
 .silent { color: #6f7a96; font-style: italic; font-size: 13px; }
 `;
@@ -376,6 +385,7 @@ export function renderDashboard(sum: HandoutSummary): string {
                 `<span class="app">${escapeHtml(r.approach)} · ${escapeHtml(r.prompt_template)}</span>` +
                 (r.current ? "" : `<span class="stale">⚠ edited since graded</span>`) +
                 `<span class="who">${escapeHtml(r.who)}</span>` +
+                (r.name ? `<span class="name">${escapeHtml(r.name)}</span>` : "") +
                 (r.tags.length ? `<div>${r.tags.map((t) => `<span class="tg">${escapeHtml(t)}</span>`).join("")}</div>` : "") +
                 (r.comment ? `<blockquote>${escapeHtml(r.comment)}</blockquote>` : "") +
                 `</div>`
@@ -396,6 +406,30 @@ ${rows}${tags}</div>`;
     .join("\n");
 
   const id = encodeURIComponent(b.handout_id);
+
+  // Said plainly, because the alternative is a false sense of what this data
+  // is. At one reader per version the version id IS a student id within a
+  // section: anyone holding the roster order can recompute
+  // (studentIndex + sectionIndex) % versions.length and read straight off who
+  // said what. The hash protects an EXPORTED file from someone who lacks the
+  // roster — a real but narrow thing — and protects nothing from you.
+  //
+  // Names stay off by default anyway, for a different reason: judging the
+  // writing goes better when you do not know whose reaction you are reading.
+  const attrib = sum.named
+    ? `<div class="attrib on">👤 <b>Names are showing.</b> ` +
+      `Turn them off to read the comments without knowing whose they are — that is the better ` +
+      `way to judge the writing. <a href="/admin/handouts/${id}">hide names</a></div>`
+    : `<div class="attrib">Rows are labelled by a salted hash, but this data is ` +
+      `<b>not anonymous to you</b> — with one reader per version, the version id identifies the ` +
+      `student within a section, and the rotation is arithmetic anyone with the roster can redo. ` +
+      `The default view hides names because judging the writing goes better blind, not because ` +
+      `it cannot be undone. <a href="/admin/handouts/${id}?names=1">show names</a></div>`;
+
+  const missing = sum.notAnswered.length
+    ? `<div class="attrib">🔔 <span class="missing"><b>Not answered at all:</b> ` +
+      `${sum.notAnswered.map(escapeHtml).join(", ")}</span> — of ${sum.cohort} on the roster.</div>`
+    : `<div class="attrib">✅ Everyone on the roster (${sum.cohort}) has answered something.</div>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -418,6 +452,8 @@ ${rows}${tags}</div>`;
   <a href="/admin/handouts/${id}?format=jsonl">records (.jsonl)</a>
   <a href="/admin/handouts/${id}?format=jsonl&amp;pairs=1">derived pairs (.jsonl)</a>
 </p>
+${missing}
+${attrib}
 ${body}
 <div class="hfoot">Worst first. Every cell holds one judgement, so no single grade is a
 measurement — the comments are the evidence and the grades are the index into them.</div>

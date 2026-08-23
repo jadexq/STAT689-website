@@ -21,7 +21,7 @@ import {
   loadStudentFile,
   resolveAssignment,
   safeId,
-  saltState,
+  saltGuard,
   saveBundle,
   saveRecord,
   summarise,
@@ -184,7 +184,7 @@ app.post("/api/handouts", async (req, res) => {
   // are disabled, here is why" is a truer answer to a misconfigured deployment
   // than "who are you?". It also leaks nothing an unauthenticated caller could
   // not learn by the feature simply not working.
-  const salt = saltState();
+  const salt = await saltGuard();
   if (!salt.ok) {
     res.status(503).json({ ok: false, note: salt.note });
     return;
@@ -237,7 +237,7 @@ app.post("/api/handouts", async (req, res) => {
 // "what exists", plus how far this reader has got with each.
 app.get("/api/handouts", async (req, res) => {
   try {
-    const salt = saltState();
+    const salt = await saltGuard();
     if (!salt.ok) {
       res.status(503).json({ handouts: [], note: salt.note });
       return;
@@ -282,7 +282,7 @@ app.get("/api/handouts", async (req, res) => {
 app.get("/handout/:id", async (req, res) => {
   const page = (status: number, msg: string) =>
     res.status(status).type("html").send(renderMarkdownPage("Handout", msg));
-  const salt = saltState();
+  const salt = await saltGuard();
   if (!salt.ok) {
     page(503, `# Handouts are unavailable\n\n${salt.note}`);
     return;
@@ -343,7 +343,7 @@ app.get("/handout/:id", async (req, res) => {
 // NEVER from the body — this is a write open to students, which is exactly why
 // the record is keyed by the caller rather than by what the caller claims.
 app.post("/api/handouts/:id/feedback", async (req, res) => {
-  const salt = saltState();
+  const salt = await saltGuard();
   if (!salt.ok) {
     res.status(503).json({ ok: false, note: salt.note });
     return;
@@ -405,7 +405,7 @@ app.post("/api/handouts/:id/feedback", async (req, res) => {
 // rejected) triples for DPO. The pairs are built at export time and never
 // stored — they are a view over the records, not a second source of truth.
 app.get("/admin/handouts/:id", async (req, res) => {
-  const salt = saltState();
+  const salt = await saltGuard();
   if (!salt.ok) {
     res.status(503).type("text/plain").send(salt.note);
     return;
@@ -450,7 +450,7 @@ app.get("/admin/handouts/:id", async (req, res) => {
       res.send(lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length ? "\n" : ""));
       return;
     }
-    res.type("html").send(renderDashboard(await summarise(bundle)));
+    res.type("html").send(renderDashboard(await summarise(bundle, req.query.names === "1")));
   } catch (err) {
     console.error(`[space] handout dashboard: ${(err as Error).message}`);
     res.status(500).type("text/plain").send("Could not read that handout's feedback.");
@@ -468,7 +468,7 @@ httpServer.listen(PORT, () => {
   console.log(`Session log: ${logFilePath()}`);
   console.log(`Auth: ${identityMode()}`);
   console.log(`Roster: ${rosterSummary()}`);
-  console.log(`Handouts: ${saltState().note}`);
+  void saltGuard().then((g) => console.log(`Handouts: ${g.note}`));
   warmIapKeys(); // fetch IAP's signing keys now, not on the first student
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });
