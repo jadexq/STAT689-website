@@ -84,13 +84,9 @@ during it. This cannot be checked from the deploy side.
       Wipe the bucket in the same pass, or accept a permanently anonymous row.
 - [ ] **Decide whether the test account keeps IAP access.** Leaving it means that person can
       sign into a space containing real students. Revoking is one command and reversible.
-- [ ] **Stage 7 finished.** Seven of nine passed 2026-08-23 (§15i has the table). **Only two are
-      left, and both need one thing from you: sign in as the student and answer a handout
-      section.** That single act closes check 5 (a real name against a real record) and check 6
-      (let it then scale to zero, sign back in, confirm the answer survived). Check 6 is the only
-      test of whether handout responses are durable at all — the flush and restore machinery is
-      already proven, a *response* is not. The instructor's admin account cannot substitute:
-      `?as=` is ignored under IAP, by design.
+- [x] **Stage 7 finished — all nine checks passed 2026-08-23** (§15i has the table and the
+      evidence). Handout responses are confirmed durable across a real cold start, and the salt
+      is confirmed stable across all five revisions. One defect came out of it: E9.
 - [ ] **Branch merged to main.** `multi-user-and-deploy-prep` is pushed; `main` is the one
       lagging. Merge only after Stage 7 passes. Deploy is `--source=.`, so what runs in
       production is a working tree, not a tag — keep the branch pushed so it is reproducible.

@@ -85,23 +85,20 @@ Uploaded through the admin panel as jadexqwang@gmail.com: `sample-attention: 2 s
 STILL OUTSTANDING, and it is yours: **grade at least one section signed in as Tester**
 (jadewang@tamu.edu). Nothing else closes checks 5 and 6.
 
-## 3. Stage 7 — 7 of 9 PASS as of 2026-08-23. Full table in §15i of gcp-deployment-plan.md.
-Passed this pass: 2 (visible half), 3, 4 (both handout and reading), 7, 8. Already had: 1, 9.
-  5. **PARTIAL.** `/admin/handouts/sample-attention?names=1` renders and resolves the roster by
-     name — "Not answered at all: **Tester**". Needs one submitted answer to finish.
-  6. **Mechanism proven, record not.** `[sync] restored` at boot + the bundle verified inside
-     `current.tar.gz`. A handout *response* has still never round-tripped.
-Both remaining checks need the same single action: sign in as jadewang@tamu.edu and answer a
-section. **I cannot do this for you** — `?as=` is ignored when TRUST_IAP_HEADER is set
-(identity.ts:248), so the admin session cannot impersonate a student. That is correct behaviour.
+## 3. Stage 7 — ALL NINE PASS, 2026-08-23. Table and evidence in §15i of gcp-deployment-plan.md.
+Nothing left here. Check 6 was the last one: the service idled out at 23:24:00Z with a clean
+`[sync] SIGTERM — final flush`, cold-started at 23:25:48Z, restored 9 files from GCS, and served
+the grades back. Handout responses are durable.
 
 NEW DEFECT, filed as E9: check 8 passed but exposed that the TA answers formula questions in
 `\[…\]` / `\(…\)`, which the chat pane does not render — the student sees raw LaTeX. Checks 4
 and 5 look at pages the instructor writes; check 8 was the only one that looked at what the model
-emits, which is where the fault was.
+emits, which is where the fault was. Not a blocker for opening the site, but it will be visible
+in week one of a course about attention.
 
 LEFTOVER TO CLEAN UP: the test reading `notation-note` ("TEST — delete before class") is in the
-corpus. No delete route (E7). The pre-class bucket wipe removes it — do the wipe after, not before.
+corpus, and Tester's grades are now in the bucket. No delete route (E7). The pre-class bucket
+wipe removes both — do the wipe after this, not before.
 
 ## 4. <test-2>'s IAP grant — USER'S DECISION, do not act unasked
 Still granted. Leaving it lets that person sign into a space containing real students; they
@@ -111,8 +108,8 @@ would land in the Common Area (no slot) and be refused handouts, but they can se
       --member="user:<test-2>" --role="roles/iap.httpsResourceAccessor"
 Reversible either way. Decide before students arrive.
 
-## 5. Merge to main — ONLY after Stage 7 passes
-Their own Stage 8 rule. `main` is 80 behind. After checks 4/5/6/9 pass:
+## 5. Merge to main — UNBLOCKED as of 2026-08-23; Stage 7 passed in full
+`main` is 80 behind. Not done yet — worth deciding whether E9 gets fixed on the branch first:
     git checkout main && git merge --no-ff multi-user-and-deploy-prep && git push origin main
 Then tick D5b/D7/D8/D10/D11/E8 in `plan/open-issues.md`.
 

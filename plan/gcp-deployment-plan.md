@@ -1702,10 +1702,10 @@ exists because nothing local tests it:
    shipped fixture is the only thing in the image.
 9. **Idle one student out of the TA office** and confirm they return to their *own* office (E8).
 
-**Results — 2026-08-23, against revision `stat689-00005-5db`.** Seven of nine pass. The two that
-remain need a signed-in *student*, which the admin account cannot stand in for: `?as=` is ignored
-whenever `TRUST_IAP_HEADER` is set (`identity.ts:248`), so there is no way to impersonate a
-student from the instructor's session. That is the auth working, not an obstacle to route around.
+**Results — 2026-08-23, against revision `stat689-00005-5db`. All nine pass.** Checks 5 and 6
+needed a signed-in *student*, which the admin account cannot stand in for — `?as=` is ignored
+whenever `TRUST_IAP_HEADER` is set (`identity.ts:248`). The instructor graded both sections at
+23:06Z and the rest followed from that one action.
 
 | # | Result | Evidence |
 |---|---|---|
@@ -1713,16 +1713,22 @@ student from the instructor's session. That is the auth working, not an obstacle
 | 2 | **pass**, visible half | `office-s6` is labelled **TESTER'S OFFICE** and holds no stand-in; Grace's next door still does — assigning a slot deletes its AI occupant, as designed |
 | 3 | **pass** | `sample-attention.handout.json` (12.7 KB) uploaded through the admin panel: `2 sections × 3 versions`. The large-body POST survives IAP |
 | 4 | **pass**, both surfaces | Handout: the scaled dot-product equation typesets. Reading: a `.md` upload with `$$…$$` and `$…$` typesets, **and `$30` / `$5` in the next paragraph stay prose** — the `mathInline` guard holds in production, not just in argument |
-| 5 | **partial** | The dashboard renders and resolves the roster by name — *"Not answered at all: **Tester**"*. Hash→name on a real record still needs a submitted answer |
-| 6 | **mechanism proven, record not** | `[sync] restored 2 files` at boot, and `space/handouts/sample-attention.handout.json` verified inside `gs://…/state/current.tar.gz`. Flush and restore both work for handout data; a *response* record has still never made the round trip |
+| 5 | **pass** | Both graded rows resolve `2152b290` → **Tester**, worst-first (grade 2 before grade 4), with tags and comments. The hash was independently recomputed forward from the salt to confirm it is `jadewang@tamu.edu` and not merely a plausible-looking label |
+| 6 | **pass** | The real thing, end to end: `[sync] SIGTERM — final flush` at 23:24:00Z on idle shutdown, `Starting new instance. Reason: AUTOSCALING` at 23:25:48Z, `[sync] restored 9 files (20 KB)` at 23:25:50Z, and the dashboard then served the grades from the fresh container. Handout responses are durable — the word "should" is now retired |
 | 7 | **pass** | Two distinct `[sync] flushed (changed)` lines — 22:38:20Z (3 files) and 22:40:50Z (4 files, 13 KB → 6 KB gz), plus a daily archive. This could not fire on 00003: with no traffic there is no first write, so `newest` never passes the boot baseline |
 | 8 | **pass** | A reading uploaded at 22:4xZ was retrieved, shown as a citation chip and quoted back correctly. **It also found [E9](./open-issues.md#e9)** — the TA writes `\[…\]`, which nothing renders |
 | 9 | **pass** (E8) | `scripts/idle-test.ts` step 6 — a *rostered* occupant idled out of the TA office lands in `office-s6`, not the commons |
 
-Two things this pass changed. **Check 8 was the valuable one**: checks 4 and 5 test pages the
+Three things worth keeping. **Check 8 was the valuable one**: checks 4 and 5 test pages the
 *instructor* writes, and check 8 was the only one that looked at what the *model* emits — which
-is where the defect was. **The test reading `notation-note` is still in the corpus**; there is no
-delete route ([E7](./open-issues.md#e7)), so the pre-class bucket wipe is what removes it.
+is where the only defect was. **Check 6 justified its own design**: letting the service idle out
+rather than deploying a no-op revision is what exercised the SIGTERM flush, and that flush is the
+step that would lose the last two minutes of grading if it were broken. **The salt held across
+all five revisions** — the same `2152b29076d7a92b` as before the wipe, which is the one silent
+failure that would orphan every record.
+
+**The test reading `notation-note` is still in the corpus**; there is no delete route
+([E7](./open-issues.md#e7)), so the pre-class bucket wipe is what removes it.
 
 
 ### 15j. Stage 8 — afterwards
