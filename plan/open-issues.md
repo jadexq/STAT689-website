@@ -223,8 +223,13 @@ Recorded so they are not rediscovered as if they were new problems.
   the optional `ROSTER` display name need an address; **the email alone is sufficient.**
 - **Test account: `jadewang@tamu.edu`** — the instructor's second Google account, confirmed a
   real Google identity (it appears in the Google account chooser). Useful beyond convenience:
-  `ADMIN_EMAILS` will hold `jadexqwang@gmail.com`, so the tamu.edu account arrives as an
-  ordinary student and exercises both roles for real.
+  `ADMIN_EMAILS` holds `jadexqwang@gmail.com`, so the tamu.edu account arrives as an ordinary
+  student and exercises both roles for real.
+- **Confirmed in the deployed app 2026-08-22.** Signed in as `jadewang@tamu.edu`: the TA
+  responds and **no admin panel is present**. So `ADMIN_EMAILS` is being applied to the
+  JWT-verified email rather than to anything client-supplied, and the student path is not
+  merely untested-and-assumed-safe. This was the point of using a second real account instead
+  of a `?as=` dev identity, which cannot prove anything about the deployed auth path.
 - **Granting one changes nothing else.** IAP grants are per-account and additive, and the five
   student offices `office-s1`…`office-s5` are static geometry in `map.ts`. `ROSTER` only maps
   email to display name in `identity.ts` — nothing derives rooms from it, so the other four
@@ -335,7 +340,9 @@ B5 (`--no-allow-unauthenticated` + `--iap`), D1 (least-privilege runtime account
 `objectUser` overwrite actually exercised). D3 was resolved earlier the same day.
 
 **2026-08-22, browser verification:** B4 (redirect URI) closed by a real sign-in on both
-accounts. D6 (CPU throttling) closed the same day.
+accounts. The admin/student split was confirmed for real — `jadexqwang@gmail.com` gets the
+admin panel, `jadewang@tamu.edu` interacts with the TA and does not (see D5). D6 (CPU
+throttling) closed the same day.
 
 Still open: **B2** and **B3** (both resolve by accident during a class), **D7** (bucket wipe,
 time-limited — see the note there), **A1**/**A2** (pre-existing test failures), **D2**/**D2b**
