@@ -572,11 +572,11 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   virtual students, who share rooms freely — nobody has complained, and nothing depends on it.
 - **Behaviour.** `MainRoom.scheduleReplies` (line 287) builds the reply set from
   `agents.filter(a => ... && !a.busy)`, and `agentRespond` (line 297) returns early if the agent
-  is busy. So a message sent to Terra while she is mid-LLM-call is dropped: **no reply, no
+  is busy. So a message sent to the TA while they are mid-LLM-call is dropped: **no reply, no
   acknowledgement, no typing indicator.** Nothing tells the student anything happened.
 - **The admin path already handles this.** `adminPrivateChat` (lines 339-341) answers
-  "(one moment — mid-conversation)" when Terra is busy. Only the student path is silent.
-- **Why it will show up.** Five students share one Terra, and each turn is one LLM call taking
+  "(one moment — mid-conversation)" when the TA is busy. Only the student path is silent.
+- **Why it will show up.** Five students share one TA, and each turn is one LLM call taking
   seconds. Two students asking at once is not an edge case, it is a Tuesday. The failure looks
   exactly like "the TA is broken", and the student's only recourse is to guess and retry.
 - **Not a regression.** Pre-existing; it simply had not been noticed because single-user testing
@@ -587,7 +587,7 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   actually matches what a student expects.
 - **Deliberately not fixed inside the A1/A2 test work** — a product change made inside a test
   fix is how you lose track of what broke what.
-- **Resolved when:** ~~a student messaging a busy Terra gets some visible response, and two
+- **Resolved when:** ~~a student messaging a busy TA gets some visible response, and two
   students asking at once both end up answered or both told to wait.~~ Met: the second student is
   told, at the door, that someone is with the TA and who. Verified by `multiuser` steps 6-7.
 

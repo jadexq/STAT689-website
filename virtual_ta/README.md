@@ -34,7 +34,7 @@ virtual space's room-based modes). The router keeps a sticky mode and asks which
 skill you want when a request is ambiguous.
 
 - Live transcription uses the browser's Web Speech API → Chrome/Chromium + mic permission.
-- Virtual space integration: the space (`../virtual_space`) embodies this TA as Terra — per-student `/api/chat` sessions, room-forced skills, and the lecturer's mic streamed to `/api/listen` with `scope:"class"` (class-wide transcript, persisted under `data/class/`, read by the classroom skill; announce returns clean text in `data.announcement` for the space's preview-then-dispatch broadcast).
+- Virtual space integration: the space (`../virtual_space`) embodies this TA on the campus — per-student `/api/chat` sessions, room-forced skills, and the lecturer's mic streamed to `/api/listen` with `scope:"class"` (class-wide transcript, persisted under `data/class/`, read by the classroom skill; announce returns clean text in `data.announcement` for the space's preview-then-dispatch broadcast).
 - Materials: drop readings (MD / TXT / HTML / PDF) into `materials/` and list them in `materials/manifest.json`.
 - Durable records: JSONL chat logs in `data/logs/`, digests in `data/digests/`, generated artifacts in `output/` (all git-ignored).
 - Behavioral improvements are documented in [`docs/improvements/`](docs/improvements/README.md) — old behavior, evidence logs, fix, verified new behavior, and design lessons.

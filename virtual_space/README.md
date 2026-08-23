@@ -5,7 +5,7 @@ five played by thin AI personas (Sam, Ben, Chloe, Dev, Grace) until a real
 address is assigned, and a sixth with no stand-in — a commons
 hall, and a bottom band of mode rooms — Prep Room / **Library** 📌 /
 **Computer Lab** 📌 / TA Office, plus a Classroom 🚧 that is sealed while
-its skill is on hold. **Terra** (the virtual TA) is powered by the real Virtual TA
+its skill is on hold. The **TA** is powered by the real Virtual TA
 brain in `../virtual_ta`. Requirements and plans:
 [`../user_requirements/virtual_space_requirements.html`](../user_requirements/virtual_space_requirements.html)
 (Parts 3, 5 & 6).
@@ -26,17 +26,17 @@ Then open **http://localhost:2567**.
   are two students at once.
 - **Role dropdown:** shown only to an account in `ADMIN_EMAILS`. *Student*
   (an avatar, normal chat) or *Admin* (no avatar — your keyboard/mouse
-  drive **Terra**; chat is either 🔒 private to the TA brain or 🗣 spoken
-  aloud as Terra in her room). A student who adds `?role=admin` by hand
+  drive the **TA**; chat is either 🔒 private to the TA brain or 🗣 spoken
+  aloud as the TA in their room). A student who adds `?role=admin` by hand
   just gets an avatar: the server grants the role, the client only asks.
 - **Move:** arrow keys / WASD, or click a tile to walk there. The camera
-  follows your avatar (Terra, for the admin); the viewport fills the
+  follows your avatar (the TA, for the admin); the viewport fills the
   window, and a **minimap** (top-right) shows the whole campus, everyone's
   position, and your current view.
-- **Chat:** reaches whoever is in the same room. Terra answers from the TA
+- **Chat:** reaches whoever is in the same room. The TA answers from the TA
   brain (one session per student, replies tagged with the skill); virtual
   students are thin personas, capped at 2 repliers per message.
-- **Rooms as modes:** the room Terra stands in forces her skill —
+- **Rooms as modes:** the room the TA stands in forces their skill —
   **Prep Room** → notes & slides, **Library** → announcements/posts,
   **Computer Lab** → code review.
 - **Classroom 🚧 (temporarily closed):** the classroom skill is disabled
@@ -45,7 +45,7 @@ Then open **http://localhost:2567**.
   and `CLASSROOM_ENABLED` in `../virtual_ta/server/router.ts` — both must
   be true.
 - **Boards 📌:** the Library and Computer Lab have bulletin boards. Admin
-  flow: instruct Terra → announce skill composes → editable preview → pin
+  flow: instruct the TA → announce skill composes → editable preview → pin
   to a board. Students see the board when they walk in. Persistent
   (`data/boards.json`). There is no global broadcast anymore.
 - **🎤 Lecture mic** (admin, Chrome): streams your lecture to the TA's

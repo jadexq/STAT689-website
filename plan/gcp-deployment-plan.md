@@ -79,7 +79,7 @@ independent of cloud. This is the single largest item in the plan.
 const ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
 ```
 
-Any student appending `?role=admin` gets: drive Terra, speak as Terra, post to bulletin
+Any student appending `?role=admin` gets: drive the TA, speak as the TA, post to bulletin
 boards, and open the lecture mic. Must be server-side and allowlisted before anyone but you
 has the URL.
 

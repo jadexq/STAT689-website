@@ -5,7 +5,7 @@ Two servers that together make a virtual classroom:
 | | |
 |---|---|
 | [`virtual_ta/`](virtual_ta/) | the TA "brain" — one chat box, an intent router, five skills. Express, port 3000. |
-| [`virtual_space/`](virtual_space/) | the campus — a tile world where **Terra** (the TA, embodied) and five virtual students live. Colyseus + Phaser, port 2567. |
+| [`virtual_space/`](virtual_space/) | the campus — a tile world where the **TA** (embodied) and five virtual students live. Colyseus + Phaser, port 2567. |
 
 The space gives the TA a body; the TA gives the body a mind. They talk over
 `localhost`, which is why they deploy as one container.
