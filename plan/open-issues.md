@@ -438,7 +438,7 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
   told, at the door, that someone is with the TA and who. Verified by `multiuser` steps 6-7.
 
 ### E5. A virtual student stood in the TA office and joined every conversation
-- [x] **Resolved 2026-08-22 in `f2f36d3` — reported by the instructor while testing as a student.**
+- [x] **Resolved 2026-08-22 in `cf8bdb4` — reported by the instructor while testing as a student.**
 - **What happened.** Sam was standing at (38,16), inside the TA office, so `scheduleReplies` —
   which picks up to two virtual students present in the speaker's room — had him answer alongside
   the TA. The 1:1 conversation was not 1:1.
