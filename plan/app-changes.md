@@ -35,10 +35,10 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ## 2026-08-22 · Announcements, a real Library, and the project repo
 
-**Status:** **steps 1 and 2 shipped 2026-08-23**, verified locally. Step 1 — `30dfd60`,
+**Status:** **steps 1, 2 and 3 shipped 2026-08-23**, verified locally. Step 1 — `30dfd60`,
 `a5278ab`, `bf9f13c`, `2786317`, `fd4efa3`. Step 2 — `9602a52` (2a), `2a531b3` (2b), `45fb3b4`
-(2c), `9830cd1` (2d), `05ddb35` (2e), `9c8aa52` (2f), plus `f314f8c` (suites). **Step 3 not
-started.** **Not deployed.** Two pieces of *enabling* work landed first so the plan could be
+(2c), `9830cd1` (2d), `05ddb35` (2e), `9c8aa52` (2f), plus `f314f8c` (suites). Step 3 — `d19c62c`
+(3a), `de60ce5` (3b), all six suites green. **Not deployed.** Two pieces of *enabling* work landed first so the plan could be
 checked against real documents rather than a fixture: `7e4b2c0` (a `MATERIALS_DIR` override and
 `npm run test:materials`) and `7539de7` (test fixtures gitignored); both are what turned 2f from
 an estimate into a measurement.
@@ -263,6 +263,46 @@ something clickable.
   searchable reading plus the pinned agenda, and `materials-test` currently prints *"only one
   searchable document — cross-document ranking is not exercised here"*. 3b turns that on, which is
   what actually closes the precondition on `open-issues.md` **E4** rather than merely arguing it.
+
+**What step 3 cost that the plan did not predict.** Written 2026-08-23, after it shipped.
+
+1. **3b needed a floor on `matchReading`, which was not in the plan.** The plan established that
+   the README is an ordinary, non-pinned reading — correct — but `coach.ts` hands a *matched*
+   reading over whole and then **stays on it**. A repo whose README is one heading long is a real,
+   listed reading that "how do I contribute to the class project?" matches squarely, and matching
+   it would have cost the student not just that answer but every later question in the session.
+   That is 2f's sticky-`readingId` failure arriving by a second route, and 3b creates it: before
+   3b nothing in the corpus was small enough to trigger it. Fixed with `MIN_MATCH_BYTES = 1_000` —
+   a document under a kilobyte is left to retrieval instead of being handed over whole. Measured
+   on the file, not the extracted text, so a PDF is not parsed just to be rejected.
+
+2. **`materials-test` step 2 was picking the wrong document again.** It used `searchable[0]`, and
+   since 3b puts the repos root ahead of the shipped one, `searchable[0]` became the near-empty
+   README. Now it ranks by extracted length and tests against whatever actually has prose — the
+   same class of fix as the pinned-agenda one in 2c, and the second time root order has silently
+   moved this index.
+
+3. **The real README is 17 bytes.** `# STAT689-project`, one heading, no body. So it contributes
+   **zero chunks** to the index: the plumbing is right, the reading is listed and it opens from
+   the shelf, but the corpus is still effectively one searchable document and `open-issues.md`
+   **E4 remains unexercised**. The plan claimed 3b would close that precondition; it closes it
+   only when the README is written. The suite now says so out loud and turns the note off by
+   itself when there is text to index.
+
+4. **Two lists name the same repository.** `virtual_space/server/repos.json` is what a student
+   clicks; `SOURCES` in `virtual_ta/server/repo.ts` is what the TA can quote. Crossing the process
+   boundary to share one list would have meant either the TA reading the space's file (a hidden
+   filesystem coupling between two processes that otherwise only speak HTTP) or the TA fetching
+   from the space at boot (an inverted dependency and a boot-order problem). One line in each
+   place, and a comment in each pointing at the other.
+
+**Verified after step 3.** Both dev servers fresh, then: `test:materials` (12 steps), `smoke`,
+`integration` (11 steps, +`/api/repos`), `multiuser`, `ghost-test`, and `idle-test` with
+`SOLO_WARN_S=4 SOLO_IDLE_S=8 HOME_IDLE_S=10` on the server. Plus two throwaway checks that are
+worth naming because they cover states the suites cannot reach: a **cold boot with no network**
+(`fetch` stubbed to throw, empty `DATA_DIR`) writes an empty manifest, warns, and leaves the
+corpus with zero readings rather than crashing; and **two syncs in a row** leave the cached file's
+mtime untouched, which is the whole point of rule 4.
 
 ### Consequences to accept
 

@@ -497,6 +497,11 @@ Product bugs, as distinct from deployment problems. Found by using the thing, no
 
 ### E4. Cross-document retrieval has never been exercised
 - [ ] **Open — not a defect. A gap in what the evidence can support.**
+- **2026-08-23, after 3b:** the corpus now lists a second searchable document — the class
+  project's README, fetched from GitHub — but the real README is `# STAT689-project` and nothing
+  else, so it contributes **zero chunks** and discriminates nothing. The plumbing that would close
+  this is in place; the text is not. It closes the day the README has content, and
+  `materials-test` step 11 already counts its chunks and will stop printing the caveat by itself.
 - `materials/manifest.json` lists **one** reading, so every part of `searchMaterials` that exists
   to choose *between* documents — the idf weighting, the title boost, `MAX_CHUNKS_PER_DOC` — is
   running but has nothing to discriminate. `scripts/materials-test.ts` says so out loud rather
