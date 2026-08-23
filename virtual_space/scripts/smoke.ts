@@ -39,7 +39,9 @@ function assert(v: unknown, label: string) {
 async function main() {
   console.log(`Connecting to ${URL} …`);
   const client = new Client(URL);
-  const student: Room = await client.joinOrCreate("main", { devUser: "jade@local" });
+  // ana@local, not the default jade@local: the latter is on the admin
+  // allowlist and so has no avatar to test with.
+  const student: Room = await client.joinOrCreate("main", { devUser: "ana@local" });
 
   let init: any = null;
   let world: { entities: Entity[] } = { entities: [] };
@@ -89,7 +91,7 @@ async function main() {
   const before = chats.length;
   student.send("chat", { text: "(talking to myself in the commons)" });
   await wait(4000);
-  assert(!chats.slice(before).some((c) => c.from !== "Jade"), "no agent replied from another room");
+  assert(!chats.slice(before).some((c) => c.from !== "Ana"), "no agent replied from another room");
 
   console.log("\n4. Admin role: no avatar, gated powers");
   student.send("admin", { action: "send", agent: "ta", dest: "commons" });

@@ -62,6 +62,11 @@ function csv(raw: string | undefined): string[] {
 // default dev user is the instructor, so the admin panel keeps working
 // out of the box — but any *other* dev identity is an ordinary student,
 // which is what makes local multi-user testing meaningful.
+//
+// This list does more than grant powers: an admin IS the TA and has no
+// avatar of their own (MainRoom.onJoin). Adding an address here therefore
+// REMOVES that person from the world as a student. Locally that means the
+// default dev user has no avatar — use ?as=ana@local to be a student.
 const ADMINS = new Set(
   (process.env.ADMIN_EMAILS ? csv(process.env.ADMIN_EMAILS) : TRUST_IAP ? [] : [DEV_USER]).map((e) =>
     e.toLowerCase()

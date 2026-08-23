@@ -5,13 +5,14 @@
 // the server broadcasts.
 //
 // Identity comes from the SERVER (Google sign-in via IAP in the cloud, a
-// dev identity locally) — this file never says who you are. `?role=admin`
-// only *requests* the admin role; the server grants it to the instructor
-// and ignores it for everyone else, so the answer to "am I admin" is
+// dev identity locally) — this file never says who you are, and since
+// 2026-08-22 it does not ask for a role either. The server derives both
+// from the ADMIN_EMAILS allowlist, so the answer to "am I admin" is
 // whatever came back in `init`, never the URL.
 //
 // Roles: "student" (you have an avatar) or "admin" (no avatar;
 // keyboard/mouse drive Terra; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
+// An instructor is ALWAYS the admin; there is no switch to a student view.
 //
 // Rendering: the entire static world (checkered floors, shaded walls,
 // furniture, door thresholds) is drawn once into a single baked texture —
@@ -43,15 +44,13 @@ type InitMsg = {
   rooms: RoomInfo[];
   you: string | null;
   role: "student" | "admin";
-  isAdmin: boolean; // may this account switch to admin at all?
+  isAdmin: boolean; // always equals (role === "admin") now; see MainRoom
   email: string;
   name: string;
   agents: { key: string; name: string }[];
 };
 
 const params = new URLSearchParams(location.search);
-// What we ASK for. The server decides what we get (see `role` below).
-const WANT_ROLE: "student" | "admin" = params.get("role") === "admin" ? "admin" : "student";
 // Local multi-user testing: ?as=ben@local. Ignored by the server behind IAP.
 const DEV_AS = params.get("as") || "";
 // What we actually ARE — filled in from init, so it cannot be faked here.
@@ -548,21 +547,6 @@ function chatMode(): "private" | "speak" {
 }
 
 function wirePanel() {
-  // Role switch: offered only to an instructor, so a student never sees a
-  // control they cannot use. (The server enforces this regardless.)
-  const roleSel = $<HTMLSelectElement>("role-sel");
-  const roleRow = roleSel.closest(".row") as HTMLDivElement | null;
-  if (init.isAdmin) {
-    roleSel.value = role;
-    roleSel.onchange = () => {
-      const q = new URLSearchParams(location.search);
-      if (roleSel.value === "admin") q.set("role", "admin");
-      else q.delete("role");
-      location.search = q.toString();
-    };
-  } else if (roleRow) {
-    roleRow.style.display = "none";
-  }
   $<HTMLDivElement>("role-sub").innerHTML =
     `You are <b>${escapeHtml(init.name)}</b> (${escapeHtml(init.email)}), a student.`;
   if (role === "admin") {
@@ -689,8 +673,7 @@ function wirePanel() {
 // ---------- boot ----------
 
 const JOIN_OPTS = () => ({
-  // We only ASK for admin; the server grants it to the instructor alone.
-  role: WANT_ROLE,
+  // No role is sent — it is derived server-side from the allowlist.
   // Local multi-user testing only — ignored behind IAP.
   ...(DEV_AS ? { devUser: DEV_AS } : {}),
 });

@@ -49,7 +49,9 @@ async function main() {
 
   // Register each connection's handlers immediately after its join —
   // messages sent during the next await would otherwise be dropped.
-  const student: Room = await client.joinOrCreate("main", { devUser: "jade@local" });
+  // ana@local, not the default jade@local: the latter is on the admin
+  // allowlist and so has no avatar to test with.
+  const student: Room = await client.joinOrCreate("main", { devUser: "ana@local" });
   student.onMessage("init", (m) => (init = m));
   student.onMessage("world", (m) => (world = m));
   student.onMessage("moved", (m: { id: string; x: number; y: number }) => {

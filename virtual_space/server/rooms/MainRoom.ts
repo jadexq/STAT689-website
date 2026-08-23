@@ -12,8 +12,9 @@
 //   admin   — NO avatar; keyboard/mouse drive Terra; chat is either
 //             🔒 private to the TA brain or 🗣 spoken aloud as Terra.
 //             Admin-only: direct agents, compose/post board items, mic.
-//             Requested by the client, GRANTED only to an allowlisted
-//             instructor — a student asking for it just gets an avatar.
+//             Determined by the ADMIN_EMAILS allowlist ALONE: an instructor
+//             IS the TA, with no student view to switch to. The client has
+//             no say — a student asking for admin just gets an avatar.
 //
 // Terra's replies come from the Virtual TA brain (ta.ts) with one session
 // per student; the room she stands in can force a skill. Board posts are
@@ -106,12 +107,16 @@ export class MainRoom extends Room {
     return identify(request, options?.devUser);
   }
 
-  onJoin(client: Client, options: any, auth?: Identity) {
+  onJoin(client: Client, _options: any, auth?: Identity) {
     const id = auth ?? (client.auth as Identity);
     this.identities.set(client.sessionId, id);
 
-    // The admin role is requested by the client and granted by us.
-    const isAdmin = id.isAdmin && options?.role === "admin";
+    // The role follows from the allowlist, not from anything the client
+    // asked for. Being unconditional is the point: the old default was
+    // "student", so the *instructor* experience was the one you had to
+    // remember to request, and board posting looked broken when you had
+    // not. A mode you can enter by accident will be entered by accident.
+    const isAdmin = id.isAdmin;
     if (isAdmin) {
       this.admins.add(client.sessionId);
       logEvent("join", { who: id.email, id: client.sessionId, role: "admin" });
@@ -145,7 +150,9 @@ export class MainRoom extends Room {
       rooms: ROOMS,
       you: isAdmin ? null : client.sessionId,
       role: isAdmin ? "admin" : "student",
-      // So the client knows whether to offer the role switch at all.
+      // Redundant with `role` now that the two always agree, but kept as
+      // the client-facing proof that asking for admin got an impostor
+      // nothing — scripts/multiuser.ts asserts this is false for them.
       isAdmin: id.isAdmin,
       email: id.email,
       name: id.name,
