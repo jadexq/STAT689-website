@@ -49,15 +49,15 @@ async function waitUntil(cond: () => boolean, timeoutMs: number, label: string) 
   throw new Error(`TIMEOUT waiting for: ${label}`);
 }
 
-// Terra DROPS a message sent while she is busy: MainRoom.scheduleReplies
+// The TA DROPS a message sent while busy: MainRoom.scheduleReplies
 // filters busy agents out of the reply set and agentRespond returns early.
 // That is deliberate, but it means a caller must RETRY — and it is why this
 // suite used to fail whenever it ran after smoke/integration, which leave
-// Terra mid-LLM-call. Waiting longer cannot help: nothing is in flight to
-// wait for. So speak, give her a while, and speak again if nothing came back.
+// TA mid-LLM-call. Waiting longer cannot help: nothing is in flight to
+// wait for. So speak, wait a while, and speak again if nothing came back.
 async function sayUntilAnswered(j: Joined, text: string, who: string, budgetMs = 180_000) {
   const mark = j.chats.length;
-  const heard = () => j.chats.slice(mark).some((c) => c.from === "Terra");
+  const heard = () => j.chats.slice(mark).some((c) => c.from === "TA");
   const deadline = Date.now() + budgetMs;
   let attempts = 0;
   while (!heard() && Date.now() < deadline) {
@@ -68,11 +68,11 @@ async function sayUntilAnswered(j: Joined, text: string, who: string, budgetMs =
   }
   if (!heard()) {
     throw new Error(
-      `TIMEOUT: Terra never answered ${who} across ${attempts} attempt(s) in ${budgetMs / 1000}s — ` +
-        `she may be stuck busy rather than merely slow`
+      `TIMEOUT: TA never answered ${who} across ${attempts} attempt(s) in ${budgetMs / 1000}s — ` +
+        `the TA may be stuck busy rather than merely slow`
     );
   }
-  console.log(`  ✓ Terra answered ${who}${attempts > 1 ? ` (took ${attempts} attempts — she was busy)` : ""}`);
+  console.log(`  ✓ TA answered ${who}${attempts > 1 ? ` (took ${attempts} attempts — the TA was busy)` : ""}`);
 }
 
 // The TA brain's filename transform for a session id.
@@ -122,7 +122,7 @@ async function main() {
     5000,
     "both humans are in the world"
   );
-  assert(ana.world.filter((e) => e.kind === "agent").length === 6, "6 agents (5 virtual students + Terra)");
+  assert(ana.world.filter((e) => e.kind === "agent").length === 6, "6 agents (5 virtual students + TA)");
   const afterTwo = ana.world.length;
   assert(ana.init!.email === "ana@local", "Ana's identity came from the server, not the client");
   assert(nameOf(ana) === "Ana" && nameOf(omar) === "Omar", "each has their own display name");
@@ -136,13 +136,13 @@ async function main() {
   assert(impostor.init!.isAdmin === false, "…and is not offered the role switch");
   assert(impostor.init!.you !== null, "…and gets an ordinary avatar");
   const spawn = (id: string) => ana.init!.rooms.find((r: any) => r.id === id).spawn;
-  const terraAt = () => ana.world.find((e) => e.id === "agent-terra")!;
+  const taEnt = () => ana.world.find((e) => e.id === "agent-ta")!;
   impostor.room.send("admin", { action: "send", agent: "ta", dest: "commons" });
   await waitUntil(() => impostor.acks.length > 0, 3000, "the server answered the admin command");
   assert(impostor.acks[0].ok === false, "…by refusing it");
   await wait(500);
   const c = spawn("commons");
-  assert(!(terraAt().x === c.x && terraAt().y === c.y), "Terra did not move");
+  assert(!(taEnt().x === c.x && taEnt().y === c.y), "TA did not move");
 
   console.log("\n3. The instructor does get it");
   const jade = await join(client, "jade@local", "admin");
@@ -170,8 +170,8 @@ async function main() {
   // Each student's turns must land in their OWN file. Previously both were
   // "space:Jade" and their histories were interleaved into one conversation.
   //
-  // Sequentially, not together: Terra handles one caller at a time
-  // (AgentRuntime.busy), so a second message sent while she is thinking is
+  // Sequentially, not together: TA handles one caller at a time
+  // (AgentRuntime.busy), so a second message sent while the TA is thinking is
   // dropped by design — that is a queueing property, not an identity one.
   const files = ["space:ana@local", "space:omar@local"].map(logFileFor);
   for (const f of files) fs.rmSync(f, { force: true });
@@ -181,35 +181,35 @@ async function main() {
     return !!e && e.x >= ta.x1 && e.x <= ta.x2 && e.y >= ta.y1 && e.y <= ta.y2;
   };
 
-  // Terra's position PERSISTS between suites and nothing returns her home.
-  // Her home is office-ta, but smoke and integration walk her elsewhere, and
-  // a suite that dies mid-way leaves her wherever it stopped. Since
+  // The TA's position PERSISTS between suites and nothing returns them home.
+  // Home is office-ta, but smoke and integration walk them elsewhere, and
+  // a suite that dies mid-way leaves them wherever it stopped. Since
   // scheduleReplies only picks agents whose room matches the speaker's, a
-  // Terra standing in someone else's office never answers — no matter how
+  // TA standing in someone else's office never answers — no matter how
   // long you wait or how often you retry. THAT is what made this suite
-  // order-dependent. So put her where this test needs her instead of hoping.
-  const terraHome = () => {
-    const t = ana.world.find((e) => e.id === "agent-terra");
+  // order-dependent. So put them where this test needs them instead of hoping.
+  const taAtHome = () => {
+    const t = ana.world.find((e) => e.id === "agent-ta");
     return !!t && t.x >= ta.x1 && t.x <= ta.x2 && t.y >= ta.y1 && t.y <= ta.y2;
   };
   const placeBy = Date.now() + 90_000;
-  while (!terraHome() && Date.now() < placeBy) {
-    // Refused while she is busy, hence the retry rather than a single send.
+  while (!taAtHome() && Date.now() < placeBy) {
+    // Refused while the TA is busy, hence the retry rather than a single send.
     jade.room.send("admin", { action: "send", agent: "ta", dest: "office-ta" });
     const until = Date.now() + 8_000;
-    while (!terraHome() && Date.now() < until) await wait(300);
+    while (!taAtHome() && Date.now() < until) await wait(300);
   }
-  assert(terraHome(), "Terra is in the TA office (put there by this suite, not assumed)");
+  assert(taAtHome(), "TA is in the TA office (put there by this suite, not assumed)");
 
   ana.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(ana), 30000, "Ana reached the TA office");
-  await sayUntilAnswered(ana, "Hi Terra, this is Ana.", "Ana");
+  await sayUntilAnswered(ana, "Hi TA, this is Ana.", "Ana");
   assert(fs.existsSync(files[0]), "Ana has a conversation file of their own");
 
   omar.room.send("goto", spawn("office-ta"));
   await waitUntil(() => inTaOffice(omar), 30000, "Omar reached the TA office");
-  // Omar retries for the same reason: Terra may still be finishing Ana.
-  await sayUntilAnswered(omar, "Hi Terra, this is Omar.", "Omar");
+  // Omar retries for the same reason: TA may still be finishing Ana.
+  await sayUntilAnswered(omar, "Hi TA, this is Omar.", "Omar");
   await waitUntil(() => fs.existsSync(files[1]), 60000, "Omar has a conversation file of their own");
 
   const anaLog = fs.readFileSync(files[0], "utf8");

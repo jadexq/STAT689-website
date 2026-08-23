@@ -11,13 +11,13 @@
 // whatever came back in `init`, never the URL.
 //
 // Roles: "student" (you have an avatar) or "admin" (no avatar;
-// keyboard/mouse drive Terra; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
+// keyboard/mouse drive the TA; chat is 🔒 private-to-TA or 🗣 speak-as-TA).
 // An instructor is ALWAYS the admin; there is no switch to a student view.
 //
 // Rendering: the entire static world (checkered floors, shaded walls,
 // furniture, door thresholds) is drawn once into a single baked texture —
 // zero per-frame cost; only the dozen avatar containers ever update. The
-// camera follows your avatar (or Terra for the admin) across the campus.
+// camera follows your avatar (or the TA for the admin) across the campus.
 
 import Phaser from "phaser";
 import { Client, Room } from "colyseus.js";
@@ -61,8 +61,8 @@ let init: InitMsg;
 let scene: WorldScene | null = null;
 let latestWorld: Entity[] = [];
 
-const TERRA_ID = "agent-terra";
-const followId = () => (role === "admin" ? TERRA_ID : init?.you);
+const TA_ID = "agent-ta";
+const followId = () => (role === "admin" ? TA_ID : init?.you);
 
 // ---------- color helpers ----------
 
@@ -85,7 +85,7 @@ function roomInfoAt(x: number, y: number): RoomInfo | undefined {
 
 function labelFor(e: Entity): string {
   if (e.kind !== "agent") return e.name;
-  const mode = e.id === TERRA_ID ? roomInfoAt(e.x, e.y)?.modeLabel : undefined;
+  const mode = e.id === TA_ID ? roomInfoAt(e.x, e.y)?.modeLabel : undefined;
   return `${e.name} 🤖${mode ? ` · ${mode}` : ""}`;
 }
 
@@ -157,7 +157,7 @@ class WorldScene extends Phaser.Scene {
     frame.style.height = `${this.miniH + 4}px`;
     document.getElementById("game")!.appendChild(frame);
 
-    // Input: arrows / WASD step, click walks (server drives Terra for
+    // Input: arrows / WASD step, click walks (server drives the TA for
     // admin). Clicking or dragging ON the minimap pans the main view
     // instead; two-finger trackpad scroll pans too. Any own movement
     // snaps the camera back to following you.
@@ -551,10 +551,10 @@ function wirePanel() {
     `You are <b>${escapeHtml(init.name)}</b> (${escapeHtml(init.email)}), a student.`;
   if (role === "admin") {
     $<HTMLDivElement>("role-sub").innerHTML =
-      "You are the <b>admin</b> — no avatar; your keyboard/mouse move <b>Terra</b>. Chat below is private to the TA or spoken as her.";
+      "You are the <b>admin</b> — no avatar; your keyboard/mouse move the <b>TA</b>. Chat below is private to the TA or spoken as them.";
     $<HTMLDivElement>("admin").style.display = "block";
     $<HTMLDivElement>("chat-mode").style.display = "block";
-    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA privately, or speak as her (pick above)…";
+    $<HTMLInputElement>("chat-input").placeholder = "Ask the TA privately, or speak as them (pick above)…";
   }
 
   const agentSel = $<HTMLSelectElement>("agent-sel");
@@ -837,7 +837,7 @@ function wireRoom(client: Client) {
       who: "system",
       text:
         role === "admin"
-          ? "Connected as admin. You're driving Terra — walk her somewhere and talk to her below."
+          ? "Connected as admin. You're driving the TA — walk them somewhere and talk to them below."
           : "Connected. You're in your office — walk out through the door to the halls.",
       cls: "sys",
     });

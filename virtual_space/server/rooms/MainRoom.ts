@@ -9,15 +9,15 @@
 //
 // Roles:
 //   student — has an avatar; normal chat & movement.
-//   admin   — NO avatar; keyboard/mouse drive Terra; chat is either
-//             🔒 private to the TA brain or 🗣 spoken aloud as Terra.
+//   admin   — NO avatar; keyboard/mouse drive the TA; chat is either
+//             🔒 private to the TA brain or 🗣 spoken aloud as the TA.
 //             Admin-only: direct agents, compose/post board items, mic.
 //             Determined by the ADMIN_EMAILS allowlist ALONE: an instructor
 //             IS the TA, with no student view to switch to. The client has
 //             no say — a student asking for admin just gets an avatar.
 //
-// Terra's replies come from the Virtual TA brain (ta.ts) with one session
-// per student; the room she stands in can force a skill. Board posts are
+// The TA's replies come from the Virtual TA brain (ta.ts) with one session
+// per student; the room they stand in can force a skill. Board posts are
 // composed by the announce skill, previewed to the admin, and pinned to a
 // room's board — students see the board when they walk in (no global
 // fan-out anymore).
@@ -25,7 +25,7 @@
 import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
 import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, forcedSkillAt, findPath } from "../map";
-import { AGENTS, TERRA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
+import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
 import { logEvent } from "../logger";
@@ -54,7 +54,7 @@ interface Sender {
 }
 
 const HISTORY_LIMIT = 30;
-const MAX_STUDENT_REPLIES = 2; // per human message — Terra is exempt
+const MAX_STUDENT_REPLIES = 2; // per human message — the TA is exempt
 // Cloud Run cuts every connection at 60 minutes and laptops sleep, so a
 // dropped socket is routine, not a departure. Hold the seat — and the
 // avatar, exactly where it was standing — for this long before cleaning up.
@@ -182,18 +182,18 @@ export class MainRoom extends Room {
   }
 
   // The entity a client's input drives / camera watches: their own avatar,
-  // or Terra for the admin.
+  // or the TA for the admin.
   private focusEntity(client: Client): Entity | undefined {
-    return this.players.get(client.sessionId) ?? (this.admins.has(client.sessionId) ? this.terra() : undefined);
+    return this.players.get(client.sessionId) ?? (this.admins.has(client.sessionId) ? this.ta() : undefined);
   }
 
-  private terra(): AgentRuntime {
-    return this.agents.find((a) => a.id === TERRA_ID)!;
+  private ta(): AgentRuntime {
+    return this.agents.find((a) => a.id === TA_ID)!;
   }
 
   // The TA brain keys conversations by this string, so it must be stable
   // across reconnects, restarts and cold starts — hence the email, not the
-  // Colyseus sessionId. The instructor's private line to Terra is a
+  // Colyseus sessionId. The instructor's private line to the TA is a
   // separate conversation from the same person's student-side chat.
   private taWho(client: Client, kind: "student" | "admin" = "student"): TaWho {
     const id = this.identities.get(client.sessionId);
@@ -260,13 +260,13 @@ export class MainRoom extends Room {
     const text = String(msg?.text || "").trim().slice(0, 500);
     if (!text) return;
 
-    // Admin chat: private line to the TA brain, or speak as Terra.
+    // Admin chat: private line to the TA brain, or speak as the TA.
     if (this.admins.has(client.sessionId)) {
       const mode = msg?.mode === "speak" ? "speak" : "private";
       if (mode === "private") {
         void this.adminPrivateChat(client, text);
       } else {
-        this.speakAsTerra(client, text);
+        this.speakAsTA(client, text);
       }
       return;
     }
@@ -280,14 +280,14 @@ export class MainRoom extends Room {
     this.scheduleReplies(rid, { name: p.name, text, who: this.taWho(client) });
   }
 
-  // Agents in the room reply: Terra always (the brain), then at most
+  // Agents in the room reply: the TA always (the brain), then at most
   // MAX_STUDENT_REPLIES virtual students — a room full of students must
   // not turn one "hello" into one LLM call per head.
   private scheduleReplies(rid: string, sender: Sender) {
     const present = this.agents.filter((a) => roomAt(a.x, a.y) === rid && !a.busy);
-    const terra = present.find((a) => a.id === TERRA_ID);
-    const students = present.filter((a) => a.id !== TERRA_ID).slice(0, MAX_STUDENT_REPLIES);
-    const queue = terra ? [terra, ...students] : students;
+    const ta = present.find((a) => a.id === TA_ID);
+    const students = present.filter((a) => a.id !== TA_ID).slice(0, MAX_STUDENT_REPLIES);
+    const queue = ta ? [ta, ...students] : students;
     queue.forEach((agent, i) => {
       this.clock.setTimeout(() => void this.agentRespond(agent, rid, sender), 300 + i * 1900);
     });
@@ -301,9 +301,9 @@ export class MainRoom extends Room {
     try {
       let text: string;
       let skill: string | undefined;
-      if (agent.id === TERRA_ID) {
-        // Terra answers with the real Virtual TA brain, one persistent TA
-        // session per student. The room she stands in may force a skill.
+      if (agent.id === TA_ID) {
+        // The TA answers with the real Virtual TA brain, one persistent TA
+        // session per student. The room they stand in may force a skill.
         const forced = forcedSkillAt(agent.x, agent.y);
         const who = sender.who ?? { sessionId: `space:${sender.name}`, email: "", name: sender.name };
         const res = await taChat(who, sender.text, forced);
@@ -323,51 +323,51 @@ export class MainRoom extends Room {
         from: agent.name,
         id: agent.id,
         kind: "agent",
-        text: agent.id === TERRA_ID ? TA_OFFLINE_MSG : "(sorry — I couldn't reach my language model just now)",
+        text: agent.id === TA_ID ? TA_OFFLINE_MSG : "(sorry — I couldn't reach my language model just now)",
       });
     } finally {
       agent.busy = false;
     }
   }
 
-  // 🔒 Admin ↔ TA brain, visible only to the admin. Terra's room still
-  // forces the skill (e.g. stand her in the Prep Room and ask for notes).
+  // 🔒 Admin ↔ TA brain, visible only to the admin. The TA's room still
+  // forces the skill (e.g. stand them in the Prep Room and ask for notes).
   private async adminPrivateChat(client: Client, text: string) {
-    const terra = this.terra();
-    client.send("chat", { from: "You → Terra", id: "admin", kind: "human", text, room: "private" });
-    logEvent("chat", { who: "admin", to: "Terra", text, private: true });
-    if (terra.busy) {
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: "(one moment — mid-conversation)", room: "private" });
+    const ta = this.ta();
+    client.send("chat", { from: "You → TA", id: "admin", kind: "human", text, room: "private" });
+    logEvent("chat", { who: "admin", to: "TA", text, private: true });
+    if (ta.busy) {
+      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: "(one moment — mid-conversation)", room: "private" });
       return;
     }
-    terra.busy = true;
-    client.send("typing", { name: terra.name });
+    ta.busy = true;
+    client.send("typing", { name: ta.name });
     try {
-      const forced = forcedSkillAt(terra.x, terra.y);
+      const forced = forcedSkillAt(ta.x, ta.y);
       const res = await taChat(this.taWho(client, "admin"), text, forced);
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
-      logEvent("chat", { who: terra.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
+      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private" });
+      logEvent("chat", { who: ta.name, to: "admin", text: res.reply, skill: res.skill, private: true, agent: true });
     } catch (err: any) {
-      logEvent("agent_error", { who: terra.name, error: String(err?.message || err) });
-      client.send("chat", { from: terra.name, id: terra.id, kind: "agent", text: TA_OFFLINE_MSG, room: "private" });
+      logEvent("agent_error", { who: ta.name, error: String(err?.message || err) });
+      client.send("chat", { from: ta.name, id: ta.id, kind: "agent", text: TA_OFFLINE_MSG, room: "private" });
     } finally {
-      terra.busy = false;
+      ta.busy = false;
     }
   }
 
-  // 🗣 The admin's words come out of Terra, verbatim, in her current room.
+  // 🗣 The admin's words come out of the TA, verbatim, in their current room.
   // Virtual students there may respond (it's a human-driven message).
-  private speakAsTerra(client: Client, text: string) {
-    const terra = this.terra();
-    const rid = roomAt(terra.x, terra.y) || "commons";
-    this.pushHistory(rid, { name: terra.name, text });
-    this.deliverToRoom(rid, { from: terra.name, id: terra.id, kind: "agent", text });
-    logEvent("chat", { who: terra.name, room: rid, text, agent: true, spokenByAdmin: true });
+  private speakAsTA(client: Client, text: string) {
+    const ta = this.ta();
+    const rid = roomAt(ta.x, ta.y) || "commons";
+    this.pushHistory(rid, { name: ta.name, text });
+    this.deliverToRoom(rid, { from: ta.name, id: ta.id, kind: "agent", text });
+    logEvent("chat", { who: ta.name, room: rid, text, agent: true, spokenByAdmin: true });
     const students = this.agents
-      .filter((a) => a.id !== TERRA_ID && roomAt(a.x, a.y) === rid && !a.busy)
+      .filter((a) => a.id !== TA_ID && roomAt(a.x, a.y) === rid && !a.busy)
       .slice(0, MAX_STUDENT_REPLIES);
     students.forEach((agent, i) => {
-      this.clock.setTimeout(() => void this.agentRespond(agent, rid, { name: terra.name, text }), 400 + i * 1900);
+      this.clock.setTimeout(() => void this.agentRespond(agent, rid, { name: ta.name, text }), 400 + i * 1900);
     });
   }
 
@@ -410,26 +410,26 @@ export class MainRoom extends Room {
 
     // Compose a board post via the announce skill; PREVIEW to the admin.
     if (action === "compose") {
-      const terra = this.terra();
+      const ta = this.ta();
       const instruction = String(msg?.instruction || "").trim().slice(0, 1000);
       if (!instruction) return client.send("adminAck", { ok: false, note: "Write an instruction first." });
-      if (terra.busy) return client.send("adminAck", { ok: false, note: "Terra is busy — try again in a moment." });
-      terra.busy = true;
-      client.send("adminAck", { ok: true, note: "Terra is composing the post…" });
+      if (ta.busy) return client.send("adminAck", { ok: false, note: "The TA is busy — try again in a moment." });
+      ta.busy = true;
+      client.send("adminAck", { ok: true, note: "The TA is composing the post…" });
       logEvent("admin_compose", { instruction });
       try {
         const res = await taChat(this.taWho(client, "admin"), instruction, "announce");
         const text = String(res.data?.announcement || res.reply);
         const boardsAvail = ROOMS.filter((r) => r.hasBoard).map((r) => ({ id: r.id, label: r.label }));
-        const terraRoom = roomAt(terra.x, terra.y);
-        const suggested = terraRoom && roomById(terraRoom)?.hasBoard ? terraRoom : "library";
-        client.send("postPreview", { from: terra.name, text, boards: boardsAvail, suggested });
+        const taRoom = roomAt(ta.x, ta.y);
+        const suggested = taRoom && roomById(taRoom)?.hasBoard ? taRoom : "library";
+        client.send("postPreview", { from: ta.name, text, boards: boardsAvail, suggested });
         client.send("adminAck", { ok: true, note: "Preview ready — edit if you like, pick a board, then post." });
       } catch (err: any) {
-        logEvent("agent_error", { who: terra.name, error: String(err?.message || err) });
-        client.send("adminAck", { ok: false, note: "Terra's brain is unreachable — is the Virtual TA server running on port 3000?" });
+        logEvent("agent_error", { who: ta.name, error: String(err?.message || err) });
+        client.send("adminAck", { ok: false, note: "The TA's brain is unreachable — is the Virtual TA server running on port 3000?" });
       } finally {
-        terra.busy = false;
+        ta.busy = false;
       }
       return;
     }
@@ -441,13 +441,13 @@ export class MainRoom extends Room {
       if (!boardRoom?.hasBoard || !text) {
         return client.send("adminAck", { ok: false, note: "Pick a board room and keep some text." });
       }
-      const item = postToBoard(boardRoom.id, this.terra().name, text);
+      const item = postToBoard(boardRoom.id, this.ta().name, text);
       logEvent("board_post", { room: boardRoom.id, by: item.by, text: item.text });
       // Everyone currently in the room sees the board refresh + a notice.
       this.sendBoardToRoomOccupants(boardRoom.id);
       this.deliverToRoom(boardRoom.id, {
-        from: this.terra().name,
-        id: TERRA_ID,
+        from: this.ta().name,
+        id: TA_ID,
         kind: "agent",
         text: `(pins a note to the ${boardRoom.label} board)`,
       });
@@ -553,7 +553,7 @@ export class MainRoom extends Room {
   }
 
   // Send a chat payload to every client whose focus entity is in the room
-  // (the admin "hears" whatever room Terra is in).
+  // (the admin "hears" whatever room the TA is in).
   private deliverToRoom(
     rid: string,
     payload: { from: string; id: string; kind: string; text: string; skill?: string }

@@ -3,7 +3,7 @@
 //   virtual_ta:    npm run dev   (port 3000)
 //   virtual_space: npm run dev   (port 2567)
 //
-// Exercises: admin role (drive Terra, private chat, speak-as-Terra),
+// Exercises: admin role (drive TA, private chat, speak-as-TA),
 // room-forced skills (prep / library / computer lab; the Classroom is
 // closed while its skill is on hold),
 // compose→preview→post to boards, mic → class transcript, and the
@@ -83,7 +83,7 @@ async function main() {
   admin.onMessage("adminAck", (m) => console.log(`  [admin] ${m.ok ? "ok" : "ERR"}: ${m.note}`));
 
   const me = () => world.entities.find((e) => e.id === init?.you);
-  const terra = () => world.entities.find((e) => e.id === "agent-terra");
+  const taEnt = () => world.entities.find((e) => e.id === "agent-ta");
   const spawnOf = (id: string) => init.rooms.find((r: any) => r.id === id).spawn;
   const at = (e: Entity | undefined, p: { x: number; y: number }) => !!e && e.x === p.x && e.y === p.y;
 
@@ -94,17 +94,17 @@ async function main() {
   }
   assert(init.rooms.filter((r: any) => r.hasBoard).length === 2, "Library and Computer Lab have boards");
 
-  console.log("\n2. Admin drives Terra");
-  const t0 = { ...terra()! };
+  console.log("\n2. Admin drives TA");
+  const t0 = { ...taEnt()! };
   admin.send("step", { dx: 0, dy: -1 });
-  await waitUntil(() => terra()!.y === t0.y - 1, 3000, "admin arrow key moved Terra");
+  await waitUntil(() => taEnt()!.y === t0.y - 1, 3000, "admin arrow key moved TA");
   admin.send("admin", { action: "send", agent: "ta", dest: "library" });
-  await waitUntil(() => at(terra(), spawnOf("library")), 30000, "Terra walked to the Library");
+  await waitUntil(() => at(taEnt(), spawnOf("library")), 30000, "TA walked to the Library");
 
   console.log("\n3. Admin ↔ TA private chat (room forces announce in the Library)");
   const aMark = aChats.length;
   admin.send("chat", { text: "Post a note that homework 1 is to read the attention paper, due Friday.", mode: "private" });
-  await waitUntil(() => aChats.slice(aMark).some((c) => c.from === "Terra" && c.room === "private"), 120000, "private reply from the TA brain");
+  await waitUntil(() => aChats.slice(aMark).some((c) => c.from === "TA" && c.room === "private"), 120000, "private reply from the TA brain");
   assert(!sChats.some((c) => c.room === "private"), "student saw none of the private exchange");
 
   console.log("\n4. Compose → preview → pin to the Library board; student sees it on entry");
@@ -136,26 +136,26 @@ async function main() {
   console.log("\n6. Computer Lab forces the review skill");
   admin.send("admin", { action: "send", agent: "ta", dest: "computer-lab" });
   student.send("goto", spawnOf("computer-lab"));
-  await waitUntil(() => at(me(), spawnOf("computer-lab")) && at(terra(), spawnOf("computer-lab")), 40000, "Jade & Terra in the Computer Lab");
+  await waitUntil(() => at(me(), spawnOf("computer-lab")) && at(taEnt(), spawnOf("computer-lab")), 40000, "Jade & TA in the Computer Lab");
   mark = sChats.length;
   student.send("chat", { text: "Which pull request should I look at first?" });
-  await waitUntil(() => sChats.slice(mark).some((c) => c.from === "Terra"), 120000, "Terra replied in the lab");
+  await waitUntil(() => sChats.slice(mark).some((c) => c.from === "TA"), 120000, "TA replied in the lab");
   assert(
-    sChats.slice(mark).find((c) => c.from === "Terra").skill === "review",
+    sChats.slice(mark).find((c) => c.from === "TA").skill === "review",
     "room forced the review skill"
   );
 
-  console.log("\n7. Speak as Terra in a student office — the virtual student responds");
+  console.log("\n7. Speak as TA in a student office — the virtual student responds");
   admin.send("admin", { action: "send", agent: "ta", dest: "office-s1" });
-  await waitUntil(() => at(terra(), spawnOf("office-s1")), 40000, "Terra walked to Sam's office");
+  await waitUntil(() => at(taEnt(), spawnOf("office-s1")), 40000, "TA walked to Sam's office");
   const aMark2 = aChats.length;
   admin.send("chat", { text: "Hi Sam! How is the attention reading going?", mode: "speak" });
   await waitUntil(
-    () => aChats.slice(aMark2).some((c) => c.from === "Terra" && c.room === "Sam's Office"),
+    () => aChats.slice(aMark2).some((c) => c.from === "TA" && c.room === "Sam's Office"),
     5000,
-    "admin's words came out of Terra in the room"
+    "admin's words came out of TA in the room"
   );
-  await waitUntil(() => aChats.slice(aMark2).some((c) => c.from === "Sam"), 120000, "Sam replied to Terra");
+  await waitUntil(() => aChats.slice(aMark2).some((c) => c.from === "Sam"), 120000, "Sam replied to TA");
 
   console.log("\nALL INTEGRATION TESTS PASSED ✅");
   await student.leave();

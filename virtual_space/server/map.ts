@@ -21,10 +21,10 @@ export interface RoomDef {
   spawn: { x: number; y: number };
   tint: string; // floor color hint for the client
   kind: "office" | "special" | "commons";
-  // When the TA agent stands in this room, chat with her is handled by
+  // When the TA agent stands in this room, chat with them is handled by
   // this skill in the TA brain (bypasses the intent router).
   forcedSkill?: string;
-  modeLabel?: string; // shown on the TA's avatar while she is in the room
+  modeLabel?: string; // shown on the TA's avatar while they are in the room
   hasBoard?: boolean; // room has a bulletin board the TA can pin posts to
   closed?: boolean; // room is sealed off (under construction); no way in
 }

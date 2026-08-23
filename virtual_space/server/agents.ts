@@ -1,5 +1,5 @@
 // The AI inhabitants: five virtual students (thin local personas) and
-// Terra, the virtual TA (whose replies come from the Virtual TA brain —
+// the TA (whose replies come from the Virtual TA brain —
 // see ta.ts / MainRoom). Per the v1 rules, agents only reply when spoken
 // to in their room or when the admin directs them — no autonomy.
 
@@ -37,17 +37,17 @@ export const AGENTS: AgentDef[] = [
     persona: `You are ${name}, ${STUDENT_BASE} ${trait}`,
   })),
   {
-    id: "agent-terra",
+    id: "agent-ta",
     key: "ta",
-    name: "Terra",
+    name: "TA",
     color: "#8f6fe8",
     home: "office-ta",
     persona:
-      "You are Terra, the virtual TA for Jade Wang's flipped-classroom course on AI and large language model agents. You are warm, encouraging, and knowledgeable.",
+      "You are the TA for Jade Wang's flipped-classroom course on AI and large language model agents. Students address you simply as \"TA\". You are warm, encouraging, and knowledgeable.",
   },
 ];
 
-export const TERRA_ID = "agent-terra";
+export const TA_ID = "agent-ta";
 
 const COMMON_RULES =
   "You are an avatar inside a small 2D virtual campus (student offices, a common area, a classroom, a prep room, a library, and a computer lab). " +

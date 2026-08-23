@@ -33,6 +33,188 @@ same way: an old entry is *supposed* to describe how things were on that date.
 
 ---
 
+## 2026-08-22 · Simplify the TA: one room, one mode, one job
+
+**Status:** **approved 2026-08-22, in progress.** Open decisions settled — see the end of this entry.
+**Supersedes:** the room-as-mode-selector design (`map.ts` `forcedSkill`) and the
+LLM-composed board post (`admin` action `compose`).
+
+### What the instructor asked for
+
+1. The TA is displayed as **"TA"**, not "Terra".
+2. The TA **never leaves the TA office**.
+3. Students must **walk into the office** to talk; consider auto-returning an idle student.
+4. **One student at a time** — the door closes while the office is occupied.
+
+Plus two simplifications decided during review:
+
+5. The TA has **one job**: answer questions grounded in course material, either searching the
+   collection or focusing on a document the student names.
+6. Board posts are **written by the instructor directly**, not composed by the model.
+
+### The collisions this had to resolve first
+
+**The instructor *is* the TA.** Since `MainRoom.focusEntity`, an admin has no avatar and their
+keys drive the TA. "The TA never moves" therefore also means "the instructor never moves".
+Decision: **hard lock, nobody moves them.** The rule is only worth having if it is true — a soft
+version leaves students able to bump into the TA in the commons, which un-does requirements 3
+and 4. Accepted cost: no more walking the TA into a student's office to speak as them.
+
+**The bottom rooms *were* the mode switch.** `forcedSkillAt()` maps Prep Room → `author`,
+Library → `announce`, Computer Lab → `review`. A TA pinned to their office is never in any of
+them, so that mechanism goes dark on the same day. Rather than replace it with a dropdown, the
+instructor chose to collapse the modes instead — see below. This is the better outcome: a
+dropdown would have preserved four modes nobody asked for.
+
+### Mode collapse: five skills → one
+
+| Skill | Today | After |
+|---|---|---|
+| `coach` | default fallback; `/coach` | **the only mode** |
+| `author` | `/notes`, `/slides`, Prep Room | dormant |
+| `review` | `/review`, PR link, Computer Lab | dormant |
+| `announce` | `/announce`, Library | dormant — replaced by typing the post |
+| `classroom` | already disabled | unchanged |
+
+**Dormant, not deleted** — the same pattern `classroom` already uses (`CLASSROOM_ENABLED`). The
+code stays, the routing does not. Reversible in one flag, and deleting working code to express a
+scope decision is how you lose it.
+
+**The router disappears with them.** `route()` exists to choose among skills; with one skill
+there is nothing to choose. `taChat` forces `coach` and the classification call is skipped —
+**one fewer LLM round trip on every single student message**, plus its latency and tokens. This
+is the largest performance win in the batch and it falls out of the simplification for free.
+
+### Requirement 5 — grounding in course material
+
+Today: `materials/manifest.json` lists readings; `matchReading()` matches one by title words;
+`loadReading()` puts up to 28,000 characters of it into the prompt. One reading at a time, named
+by the student. That covers "ask about a certain document" and nothing else.
+
+What is missing is search. **Recommendation: keyword retrieval over chunks, no new
+dependencies.** Split each document into ~1,500-character chunks at startup, score them against
+the question (title match weighted above body match), and put the best handful in the prompt.
+
+Deliberately *not* embeddings yet. `materials.ts:4` already nominates vector retrieval as "the
+later upgrade", and it is — but it needs an embedding provider, a store, and a rebuild step, and
+the collection is currently **one file**. Keyword-over-chunks is a few dozen lines and no infra.
+Revisit past roughly twenty documents.
+
+Chunking earns its keep regardless of retrieval quality: loading two or three whole documents at
+28k characters each would blow out prompt cost and latency, so *something* has to select
+sub-document context the moment there is more than one reading.
+
+**Posture — decided: answer directly.** `coach` was deliberately Socratic ("do NOT hand over
+full answers"), which conflicts with request 5. The instructor chose direct answers grounded in
+the material, citing which document each claim came from. The Socratic framing goes; the skill
+keeps its name and its per-reading question digest.
+
+The skill name `coach` now under-describes it, but renaming it would churn the session store
+(`session.mode` is persisted and restored from logged turns). Left alone deliberately.
+
+### Requirement 6 — posting to the board
+
+`admin` action `post` already accepts raw text and pins it; only `compose` calls the model. So
+this is mostly deletion: remove `compose`, and the existing preview textarea becomes a plain
+write-and-post form.
+
+Rejected: an HTTP endpoint driven by `curl`. It sits behind IAP, so every call needs the
+identity-token minting from `open-issues.md` B1 — real cost, no gain over a textarea. A
+git-tracked seed file read at startup remains a reasonable *later* option for material decided
+before the semester, but it costs a redeploy per edit, so it cannot be the main path.
+
+**This probably closes E1** ("the TA cannot post to the Library board"). Under the old design,
+posting meant composing through the announce skill; the local evidence said that path worked, so
+"wrong mode, not a defect" was the leading explanation. A form with no mode cannot be in the
+wrong mode.
+
+### Requirement 4 — the door
+
+Single occupancy on `office-ta`, counting humans only. The TA lives there and never counts.
+
+Enforcement has to happen in three places, because occupancy changes while people are walking:
+
+- `handleStep` — refuse a step onto the door tile or into the room when it is taken.
+- `handleGoto` — path with the door tile blocked, so BFS refuses rather than routing through it.
+- inside `walk()` — re-check each step; someone may have claimed the room mid-walk.
+
+Client gets a new `notice` message (rendered as a system line, like the "under construction"
+one) and draws the door closed. Occupancy is broadcast **only when it changes**, not per move —
+`MainRoom.ts:522` documents why per-move full-state broadcasts were the dominant egress cost.
+
+**This also addresses E2.** A student messaging a busy TA currently gets silence, because the TA
+serialises on a `busy` flag. The door makes that queue visible and fair: you are told the office
+is occupied at the threshold instead of having your message vanish.
+
+### Requirement 3 — idle auto-return
+
+Recommended: **yes, and it is not optional.** Without it requirement 4 is a lockout bug — a
+student who walks in and closes their laptop holds the only door shut indefinitely.
+
+- Warn at 4 minutes, walk them home at 5. Reuses the existing `walk` and `findPath`.
+- **Free the door immediately on disconnect**, before `allowReconnection` is awaited. Otherwise
+  a dropped socket holds the office for the full `RECONNECT_WINDOW_S = 120`.
+- Roughly 30 lines.
+
+Note the throughput this implies: one student at a time, so five students is a queue. That
+constraint already existed invisibly (the `busy` flag); this makes it explicit. If it bites,
+the lever is the idle timeout, not the door.
+
+### Plan — four commits, each independently testable
+
+1. **Rename.** `Terra` → `TA` in the display name and persona; `agent-terra` → `agent-ta`;
+   `TERRA_ID` → `TA_ID`. Comments switch from "she" to "the TA". Existing `boards.json` entries
+   keep the old byline — cosmetic, and `open-issues.md` D7 wipes state before the first class.
+2. **Lock + collapse.** TA immovable for everyone; admin `send` refuses the TA; `forcedSkill`
+   plumbing goes dormant; router forced to `coach`; hint text and admin banner rewritten.
+3. **Door.** Single occupancy, `notice` message, closed-door rendering, occupancy broadcast.
+4. **Idle return.** Warn, walk home, free on disconnect.
+
+Materials retrieval (requirement 5) is a fifth, larger commit in `virtual_ta` — planned
+separately once the posture question above is settled.
+
+### The part that is not small — tests
+
+Three of four suites move the TA around, so they encode exactly the behaviour being removed:
+
+| Suite | What breaks | Becomes |
+|---|---|---|
+| `smoke.ts` | step 4 sends the TA to the commons; step 5 chats there | student walks *in*; chat happens in the office |
+| `integration.ts` | step 2 drives the TA by arrow key; step 6 walks both to the lab; step 7 speaks as the TA in Sam's office | step 2 asserts the TA **cannot** be moved; steps 6–7 rewritten or dropped |
+| `multiuser.ts` | the whole TA-placement block added for A2 | deleted — a fixed TA is what that block was faking |
+| `ghost-test.ts` | agent-count assertion only | unaffected beyond the id rename |
+
+New coverage owed: door refuses a second student, door reopens on exit, idle student is returned,
+disconnect frees the door immediately.
+
+**A2 dissolves rather than being fixed.** That failure existed because the TA's position
+persisted across suites and nothing sent them home. A TA that cannot move has no position to
+persist. The placement block added in `7eedc2a` becomes dead weight the day this ships.
+
+### Consequences to accept
+
+- No walking the TA into a student's office to speak as them. The five virtual students can
+  still be dispatched and directed anywhere.
+- The admin camera no longer follows anything; manual pan and the minimap still work.
+- **Prep Room is sealed**, using the same flag the Classroom already uses — it existed only to
+  put the TA in `author` mode. **Computer Lab stays open**: its board survives the change, and
+  a room students can walk into and read is still worth having.
+- Students can no longer reach `author` / `review` / `announce` by slash command.
+
+### Decisions taken 2026-08-22
+
+1. **Posture** — direct grounded answers with citations, not Socratic.
+2. **Timeout** — in scope; 4-minute warning, 5-minute return, as proposed.
+3. **Empty rooms** — seal the Prep Room; leave the Computer Lab open.
+
+### Rollback
+
+Each commit reverts independently. The riskiest is 2, because it changes what the instructor can
+do; reverting it restores movement and the room-based modes together, since they are the same
+mechanism.
+
+---
+
 ## 2026-08-22 · Make the test suites order-independent (A1, A2)
 
 **Status:** **shipped 2026-08-22** — `7eedc2a`, verified locally

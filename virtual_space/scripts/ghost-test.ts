@@ -56,7 +56,7 @@ async function main() {
 
   // The cast is fixed even though the human count is not.
   if (agents.length !== 6)
-    throw new Error(`expected 6 agents (5 virtual students + Terra), got ${agents.length}`);
+    throw new Error(`expected 6 agents (5 virtual students + TA), got ${agents.length}`);
 
   // Generalises the check above: nobody may appear twice, under any name.
   const names = humans.map((e: any) => e.name);
