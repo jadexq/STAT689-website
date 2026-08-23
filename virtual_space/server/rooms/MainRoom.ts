@@ -90,6 +90,9 @@ const RECONNECT_WINDOW_S = 120;
 // Distinct from the CLIENT's 15-minute idle park (main.ts IDLE_MS), which
 // closes the socket to stop burning a Cloud Run connection. This one is
 // about fairness inside one room, so it is much shorter.
+const BULLETIN_ITEMS = 10;
+const BULLETIN_CHARS = 1_500;
+
 const SOLO_WARN_MS = Number(process.env.SOLO_WARN_S || 4 * 60) * 1000;
 const SOLO_IDLE_MS = Number(process.env.SOLO_IDLE_S || 5 * 60) * 1000;
 const SOLO_SWEEP_MS = 5_000;
@@ -531,7 +534,7 @@ export class MainRoom extends Room {
         // session per student. No skill is forced from here any more — the
         // brain has one skill, so there is nothing to choose.
         const who = sender.who ?? { sessionId: `space:${sender.name}`, email: "", name: sender.name };
-        const res = await taChat(who, sender.text);
+        const res = await taChat(who, sender.text, this.bulletin());
         text = res.reply;
         skill = res.skill;
         const src = (res.data as any)?.sources;
@@ -569,7 +572,7 @@ export class MainRoom extends Room {
     ta.busy = true;
     client.send("typing", { name: ta.name });
     try {
-      const res = await taChat(this.taWho(client, "admin"), text);
+      const res = await taChat(this.taWho(client, "admin"), text, this.bulletin());
       const src = (res.data as any)?.sources;
       client.send("chat", {
         from: ta.name, id: ta.id, kind: "agent", text: res.reply, skill: res.skill, room: "private",
@@ -710,6 +713,22 @@ export class MainRoom extends Room {
   }
 
   // ---------- boards ----------
+
+  // The announcements, as one block for the TA brain. Capped: this rides on
+  // every single student message, so an unbounded feed would quietly become
+  // the largest part of every prompt.
+  private bulletin(): string {
+    const lines: string[] = [];
+    let used = 0;
+    for (const item of getBoard(ANNOUNCEMENTS).slice(0, BULLETIN_ITEMS)) {
+      const line = `- (posted ${item.ts.slice(0, 10)}) ${item.text.replace(/\s+/g, " ")}`;
+      if (used + line.length > BULLETIN_CHARS) break;
+      lines.push(line);
+      used += line.length;
+    }
+    return lines.join("\n");
+  }
+
 
   // Whenever the world changes, tell any client whose focus entity entered
   // or left a board room what's pinned there.

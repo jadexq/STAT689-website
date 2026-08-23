@@ -23,7 +23,12 @@ export interface TaWho {
 // One chat turn with the brain. No skill parameter: the TA brain has exactly one skill now, so there is
 // nothing for a caller to force. The wire still accepts one — see
 // virtual_ta/server/router.ts SINGLE_SKILL — but nothing here sends it.
-export async function taChat(who: TaWho, message: string): Promise<TaChatResult> {
+// `bulletin` is course logistics the space knows and the brain does not: the
+// instructor's announcements, and later the agenda. Sent per turn rather than
+// synced, because it is small and because the alternative — the brain reading
+// the space's boards.json across a server boundary — couples two processes
+// that otherwise only speak HTTP.
+export async function taChat(who: TaWho, message: string, bulletin?: string): Promise<TaChatResult> {
   const res = await fetch(`${TA_BASE}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -31,6 +36,7 @@ export async function taChat(who: TaWho, message: string): Promise<TaChatResult>
       sessionId: who.sessionId,
       message,
       who: { email: who.email, name: who.name },
+      bulletin: bulletin || undefined,
     }),
     signal: AbortSignal.timeout(180_000),
   });

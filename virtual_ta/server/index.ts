@@ -77,7 +77,7 @@ app.post("/api/listen", async (req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { sessionId, message, readingId, skill: forcedSkill, who } = req.body ?? {};
+  const { sessionId, message, readingId, skill: forcedSkill, who, bulletin } = req.body ?? {};
   if (typeof sessionId !== "string" || typeof message !== "string" || !message.trim()) {
     res.status(400).json({ error: "sessionId and message required" });
     return;
@@ -87,6 +87,9 @@ app.post("/api/chat", async (req, res) => {
   const name = typeof who?.name === "string" ? who.name : null;
   const session = await ensureSession(sessionId);
   if (typeof readingId === "string" && readingId) session.readingId = readingId;
+  // Assigned unconditionally, so a caller that does not send one (the TA's
+  // own web client) clears the last caller's rather than inheriting it.
+  session.bulletin = typeof bulletin === "string" && bulletin.trim() ? bulletin.trim() : null;
 
   pushHistory(session, "user", message);
   await logTurn({ sessionId, email, name, role: "user", skill: session.mode, readingId: session.readingId, content: message });

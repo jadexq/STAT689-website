@@ -15,6 +15,20 @@ import { readQuestions, recordQuestion, writeDigest } from "../logger.ts";
 import type { Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
 
+// Announcements and the agenda, as the space reported them this turn. The
+// ordering rule matters: a reading can say "the homework is due Friday" and be
+// a year out of date, while the board is what the instructor pinned today.
+function bulletinBlock(session: Session): string {
+  if (!session.bulletin) return "";
+  return `
+
+COURSE NOTICEBOARD — what the instructor has posted, and the agenda:
+---
+${session.bulletin}
+---
+Rule: for logistics — dates, deadlines, what is assigned, what happens when — the noticeboard above is authoritative and overrides anything a reading says. For everything else, the readings are the source.`;
+}
+
 const DIGEST_RE = /\b(digest|question summary|summarize .* questions|what .* students ask)\b/i;
 
 export async function coach(session: Session, message: string): Promise<SkillResult> {
@@ -36,7 +50,7 @@ export async function coach(session: Session, message: string): Promise<SkillRes
 
     if (passages.length) {
       const found = [...new Set(passages.map((p) => p.title))];
-      const system = `${BASE_PERSONA}
+      const system = `${BASE_PERSONA}${bulletinBlock(session)}
 
 A student asked a question. The passages below were retrieved from the course materials because they look relevant.
 Rules:
@@ -56,7 +70,7 @@ ${passageBlock(passages)}`;
     // Nothing matched. Say so rather than implying the materials were
     // consulted and agreed — a confident answer with no source is exactly
     // what students should not learn to trust here.
-    const system = `${BASE_PERSONA}
+    const system = `${BASE_PERSONA}${bulletinBlock(session)}
 
 A student has asked you something, and nothing in the course materials matched it.
 Rules:
@@ -78,7 +92,7 @@ ${list}`;
   // Collect the student's question for the instructor digest
   if (text.includes("?")) await recordQuestion(loaded.reading.id, text);
 
-  const system = `${BASE_PERSONA}
+  const system = `${BASE_PERSONA}${bulletinBlock(session)}
 
 You are answering a student's question about the course document "${loaded.reading.title}".
 Rules:
