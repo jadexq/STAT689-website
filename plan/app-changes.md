@@ -123,8 +123,8 @@ discover on day one that they cannot read their own noticeboard.
 |---|---|---|---|
 | 2a | **The space proxies the corpus** | `GET /api/materials` (list, forwarded to `TA_BASE_URL`) and `GET /api/materials/:id/file` (bytes). The browser cannot reach the TA; this is the bridge. Path traversal is already refused inside `materials.ts`, and `:id` is looked up in the manifest rather than joined onto a path, so the proxy adds no new file-system surface. | `virtual_space/server/index.ts` |
 | 2b | **The Library board becomes the materials shelf** | Rendered from the proxied list — title, one line, a link the space serves — rather than from hand-typed posts. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in the same step. That single-source property is the entire reason for 2a. | `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
-| 2c | **`agenda.json`, rendered as a schedule** | The agenda is *not* a PDF. Structured source (`week`, `date`, `topic`, `readings: [id]`, `due`) rendered two ways: a schedule table at the top of the Library, and a flat text block generated for the TA. One file to maintain, two renderings, no drift. A PDF would make "what should I read before Thursday?" unanswerable, which is most of the value. | `virtual_ta/materials/agenda.json`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
-| 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Always included rather than retrieved — it is small, and it is the one document where retrieval missing it produces a *confidently wrong* answer about a deadline rather than a vague one. | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
+| 2c | **`agenda.md`, with a table convention** | The agenda is *not* a PDF, and after review it is **not JSON either** — it is a markdown table, one row per week: `Week | Date | Topic | Read | Due`. Markdown because an agenda that is annoying to edit is an agenda that goes stale, and stale is the one failure mode that matters. The server parses the table best-effort for the schedule rendering; **if a row does not parse it is rendered verbatim rather than dropped**, so a stray `|` degrades the display instead of silently losing a week. | `virtual_ta/materials/agenda.md`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
+| 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Markdown makes this side nearly free: the TA already ingests `.md` from `materials/`, so the agenda is a manifest entry and a pinned-context flag rather than a JSON-to-text generator. Always included rather than retrieved — it is the one document where retrieval missing it yields a *confidently wrong* answer about a deadline instead of a vague one. | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
 | 2e | **Upload without a redeploy** *(droppable)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
 
 **On 2e:** it is the difference between "adding a reading is a git commit and a deploy" and
@@ -161,7 +161,7 @@ still holds — the first four suites run against a fresh server, in order.
 | `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
 | `integration` | board count 2 → 8; the announcement→TA leg from 1e |
 | `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
-| `materials-test` | agenda indexed and retrievable; README present after 3b |
+| `materials-test` | agenda indexed and retrievable; a malformed table row still renders; README present after 3b |
 | `idle-test` | unchanged |
 
 ### Held back — feature 4 (handouts with saved answers)
@@ -182,8 +182,12 @@ and same FERPA footing as the conversation logs.
    against the materials shelf for no reach the offices did not already have.
 2. **All board posts get instructor attribution, not just announcements.** Consistent and honest,
    since a human types all of them. Say so if the Library and Lab posts should stay signed "TA".
-3. **The agenda is JSON, not markdown.** Structured beats prose here because two consumers render
-   it. Costs a little authoring comfort.
+3. ~~**The agenda is JSON, not markdown.**~~ **Overturned by the instructor on review** — the
+   agenda is markdown with a table convention (2c). The right call: it costs the Library a
+   ~20-line table parser and loses the reading-id linkage, but it buys an agenda that is
+   pleasant to edit, and it makes the TA side nearly free since `.md` is already ingested. The
+   client also avoids a markdown dependency it cannot afford — the bundle is already ~1.2 MB
+   against a 1 GiB/month egress allowance.
 4. **`repos.json` is config, not a board post** — so a state wipe does not silently empty the
    Computer Lab.
 5. **The `announce` skill stays dormant rather than being deleted.** Same pattern as `classroom`.
