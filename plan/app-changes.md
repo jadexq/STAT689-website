@@ -123,9 +123,10 @@ discover on day one that they cannot read their own noticeboard.
 |---|---|---|---|
 | 2a | **The space proxies the corpus** | `GET /api/materials` (list, forwarded to `TA_BASE_URL`) and `GET /api/materials/:id/file` (bytes). The browser cannot reach the TA; this is the bridge. Path traversal is already refused inside `materials.ts`, and `:id` is looked up in the manifest rather than joined onto a path, so the proxy adds no new file-system surface. | `virtual_space/server/index.ts` |
 | 2b | **The Library board becomes the materials shelf, and `.md` is rendered on the way out** | Cards from the proxied list — title, one line, a link the space serves. Adding a reading to `manifest.json` makes it downloadable in the Library *and* answerable by the TA in one step; that single-source property is the entire reason for 2a. **The file route renders `.md` to HTML before serving it**, because markdown is the best format for the TA and the worst for a student who clicks it — a browser shows raw text or offers a download. Rendering **server-side** keeps it off a client bundle that is already ~1.2 MB. `.html` and `.pdf` are passed through untouched. | `virtual_space/server/index.ts`, `client/src/main.ts`, `client/static/index.html`, `server/rooms/MainRoom.ts` |
-| 2c | **`agenda.md`, with a table convention** | The agenda is *not* a PDF, and after review it is **not JSON either** — it is a markdown table, one row per week: `Week | Date | Topic | Read | Due`. Markdown because an agenda that is annoying to edit is an agenda that goes stale, and stale is the one failure mode that matters. The server parses the table best-effort for the schedule rendering; **if a row does not parse it is rendered verbatim rather than dropped**, so a stray `|` degrades the display instead of silently losing a week. | `virtual_ta/materials/agenda.md`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
-| 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Markdown makes this side nearly free: the TA already ingests `.md` from `materials/`, so the agenda is a manifest entry and a pinned-context flag rather than a JSON-to-text generator. Always included rather than retrieved — it is the one document where retrieval missing it yields a *confidently wrong* answer about a deadline instead of a vague one. | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
-| 2e | **Upload without a redeploy** *(droppable)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
+| 2c | **`agenda.md`, parsed against the real file** | Columns are the instructor's, not an invented set: `Date \| Week \| Lecture \| Content \| Homework \| Topic`. Three properties the file actually has and a naive parser gets wrong: **`Topic` spans** — it is filled on the first row of a block and blank after, so blank means *continues above*, not *no topic*; **dates carry no year** (`08/24`), so the year is explicit config, never inferred from the clock, or a student opening the page in January is shown next year's course; and **most rows are empty** (weeks 4-15 are placeholders), so the schedule renders them as scheduled-but-unplanned rather than as blanks. | `virtual_ta/materials/agenda.md`, `virtual_ta/server/materials.ts`, `virtual_space/client/src/main.ts` |
+| 2d | **The agenda goes into the TA's prompt** | Same channel 1c built, alongside the announcements. Markdown makes this side nearly free: the TA already ingests `.md` from `materials/`, so the agenda is a manifest entry and a pinned-context flag rather than a JSON-to-text generator. Always included rather than retrieved — it is the one document where retrieval missing it yields a *confidently wrong* answer about a deadline instead of a vague one. **Only rows with content go into the prompt** — forty blank placeholder rows are not neutral filler, they invite the model to fill them in, and an invented Week 9 topic stated with the agenda's authority is worse than "not scheduled yet". | `virtual_ta/server/skills/coach.ts`, `virtual_ta/server/materials.ts` |
+| 2e | **Upload without a redeploy** *(now recommended — see provenance below)* | Materials are baked into the container, so today a new reading costs a build. Read `DATA_DIR/ta/materials` in addition to the repo directory, with an upload form on the admin card. Last in the step so it can be cut without disturbing 2a–2d. | `virtual_ta/server/materials.ts`, `virtual_ta/server/index.ts`, `virtual_space/server/index.ts`, `client/*` |
+| 2f | **Long documents** — *not optional* | The first real reading is **114 KB**, thirty times the only document the pipeline has ever seen. Two limits that were invisible at 3.7 KB now bite. `MAX_READING_CHARS = 28_000` silently truncates a named reading to its **first quarter**, so "in the agentic dev notes, what does it say about MCP?" is answered from a slice that does not contain the MCP section — confidently, with no signal that the rest was cut. And `MAX_CHUNKS_PER_DOC = 4` exists to stop one long document crowding out others; with one document 30× the rest it will bite on nearly every query. Fix: **chunk on headings** (the file has 19 `##` and 106 `###`), which also makes every passage self-describing so the TA can cite *§5 of the notes* rather than just the title; raise the per-doc cap when the corpus is small; and when a named reading does not fit, retrieve within it instead of truncating it. | `virtual_ta/server/materials.ts` |
 
 **On formats.** All three are already supported (`materials.ts` branches on extension: `unpdf` for
 PDF, `stripHtml` for HTML, read-as-is otherwise). The house preference is **`.md` for readings**:
@@ -136,6 +137,18 @@ interactive — written by hand rather than exported; a Google Docs HTML export 
 strips `<script>`/`<style>` but not nav or footers, so a saved web page brings its chrome into
 the index. `.pdf` only for papers that cannot be re-authored: extraction is the lossiest path,
 and multi-column layouts interleave.
+**On 2f.** This is the value of testing against real material rather than a fixture, and it
+lands squarely on `open-issues.md` **E4**, which is open because cross-document retrieval had
+never been exercised — the corpus was one file. It is now two real ones of wildly different
+size, which is the harder and more honest case.
+
+**On provenance.** The first reading is the instructor's own prose, but it carries references to
+Apple-internal tooling picked up at a workshop. Two separate questions, with different answers.
+*Serving it* to enrolled students behind IAP is fine — that is a course reserve. *Committing it*
+is the risk: `virtual_ta/materials/` is tracked, and the repo is private **today**, a decision
+git history outlives. So either scrub the internal references, or keep the corpus out of git and
+load it from `DATA_DIR` — which is exactly 2e. That is why 2e moved from droppable to
+recommended: it turns out to be a confidentiality boundary, not just a convenience.
 
 **On 2e:** it is the difference between "adding a reading is a git commit and a deploy" and
 "adding a reading is a drag and drop". Worth having before the semester, not necessarily before
@@ -145,7 +158,7 @@ the next test. Flagged droppable rather than dropped.
 
 | # | Commit | What changes | Files |
 |---|---|---|---|
-| 3a | **Repo cards on the Computer Lab board** | A small `repos.json` (name, one-line description, URL) rendered as cards, instead of a raw pasted link. Config rather than a board post, so it survives a `boards.json` wipe — and D7 wipes state before the first class. | `virtual_space/server/repos.json`, `server/rooms/MainRoom.ts`, `client/src/main.ts` |
+| 3a | **Repo cards on the Computer Lab board** | A small `repos.json` (name, one-line description, URL — `github.com/jadexq/STAT689-project`) rendered as cards, instead of a raw pasted link. Config rather than a board post, so it survives a `boards.json` wipe — and D7 wipes state before the first class. | `virtual_space/server/repos.json`, `server/rooms/MainRoom.ts`, `client/src/main.ts` |
 | 3b | **The README joins the corpus** | Fetch the public repo's README at boot and on a slow interval, cache it under `DATA_DIR`, register it as a reading. Then "how do I contribute to the project?" is a grounded answer rather than a shrug. Public repo means no token. **The fetch must not block startup** and must fall back to the cached copy — a GitHub outage cannot be allowed to stop the class server from booting. | `virtual_ta/server/materials.ts`, `virtual_ta/server/repo.ts` |
 
 ### Consequences to accept
@@ -171,7 +184,7 @@ still holds — the first four suites run against a fresh server, in order.
 | `smoke` | pin to Library still works; new: pin an announcement, student sees it at home |
 | `integration` | board count 2 → 8; the announcement→TA leg from 1e |
 | `multiuser` | unchanged — no new per-student state, which is a consequence of the class-wide decision |
-| `materials-test` | agenda indexed and retrievable; a malformed table row still renders; one reading of each format (`.md`, `.html`, `.pdf`) extracts to sane text; README present after 3b |
+| `materials-test` | agenda parsed with spanning topics and no year; a malformed row still renders; each format (`.md`, `.html`, `.pdf`) extracts to sane text; **a question whose answer lives in the last quarter of the 114 KB reading is answered correctly** — the 2f regression test; README present after 3b |
 | `idle-test` | unchanged |
 
 ### Held back — feature 4 (handouts with saved answers)
