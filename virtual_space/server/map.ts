@@ -14,6 +14,11 @@
 
 export const TILE = 32;
 
+// A board feed is not always a room. The class-wide announcements feed has no
+// room of its own: it is displayed by all six student offices, which is where
+// students spawn, so an announcement is the first thing they see at sign-in.
+export const ANNOUNCEMENTS = "announcements";
+
 export interface RoomDef {
   id: string;
   label: string;
@@ -24,7 +29,11 @@ export interface RoomDef {
   spawn: { x: number; y: number };
   tint: string; // floor color hint for the client
   kind: "office" | "special" | "commons";
-  hasBoard?: boolean; // room has a bulletin board the TA can pin posts to
+  hasBoard?: boolean; // room has a bulletin board the instructor can pin posts to
+  // Which feed this room's board displays. Absent means the room's own feed.
+  // Every student office points at ANNOUNCEMENTS, so one pinned item shows up
+  // in six rooms — and unpinning it later stays one action rather than six.
+  boardFeed?: string;
   closed?: boolean; // room is sealed off (under construction); no way in
   // At most one human inside at a time; the door shuts behind them.
   soloOccupancy?: boolean;
@@ -46,12 +55,12 @@ const OFFICE_TINT_B = "#33405c";
 
 export const ROOMS: RoomDef[] = [
   // --- band 1: five student offices + Jade (rows 1-6) ---
-  { id: "office-s1",  label: "Sam's Office",   x1: 1,  y1: 1, x2: 6,  y2: 6, spawn: { x: 3,  y: 3 }, tint: OFFICE_TINT_A, kind: "office" },
-  { id: "office-s2",  label: "Ben's Office",   x1: 8,  y1: 1, x2: 13, y2: 6, spawn: { x: 10, y: 3 }, tint: OFFICE_TINT_B, kind: "office" },
-  { id: "office-s3",  label: "Chloe's Office", x1: 15, y1: 1, x2: 20, y2: 6, spawn: { x: 17, y: 3 }, tint: OFFICE_TINT_A, kind: "office" },
-  { id: "office-s4",  label: "Dev's Office",   x1: 22, y1: 1, x2: 27, y2: 6, spawn: { x: 24, y: 3 }, tint: OFFICE_TINT_B, kind: "office" },
-  { id: "office-s5",  label: "Grace's Office", x1: 29, y1: 1, x2: 34, y2: 6, spawn: { x: 31, y: 3 }, tint: OFFICE_TINT_A, kind: "office" },
-  { id: "office-jade", label: "Jade's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office" },
+  { id: "office-s1",  label: "Sam's Office",   x1: 1,  y1: 1, x2: 6,  y2: 6, spawn: { x: 3,  y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  { id: "office-s2",  label: "Ben's Office",   x1: 8,  y1: 1, x2: 13, y2: 6, spawn: { x: 10, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  { id: "office-s3",  label: "Chloe's Office", x1: 15, y1: 1, x2: 20, y2: 6, spawn: { x: 17, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  { id: "office-s4",  label: "Dev's Office",   x1: 22, y1: 1, x2: 27, y2: 6, spawn: { x: 24, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  { id: "office-s5",  label: "Grace's Office", x1: 29, y1: 1, x2: 34, y2: 6, spawn: { x: 31, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  { id: "office-jade", label: "Jade's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
   // --- bottom band: special rooms + TA office (rows 14-19) ---
   { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special",
     ...(CLASSROOM_OPEN ? {} : { closed: true }) },
@@ -62,6 +71,19 @@ export const ROOMS: RoomDef[] = [
   { id: "office-ta",    label: "TA Office",    x1: 35, y1: 14, x2: 41, y2: 19, spawn: { x: 38, y: 16 }, tint: "#3a3158", kind: "special", soloOccupancy: true },
   // --- commons: catch-all for all remaining floor; rect = the hall (label/spawn) ---
   { id: "commons", label: "Common Area", x1: 1, y1: 8, x2: 41, y2: 12, spawn: { x: 21, y: 10 }, tint: "#2b3247", kind: "commons" },
+];
+
+// Which feed a room's board shows.
+export function boardFeedOf(room: RoomDef): string {
+  return room.boardFeed ?? room.id;
+}
+
+// Where the instructor can pin. Not the same set as the rooms that *display* a
+// board: the six offices all show the announcements feed, and posting "to an
+// office" is a thing the class-wide design deliberately does not offer.
+export const POST_TARGETS: { id: string; label: string }[] = [
+  { id: ANNOUNCEMENTS, label: "📣 Announcements — all students" },
+  ...ROOMS.filter((r) => r.hasBoard && !r.boardFeed).map((r) => ({ id: r.id, label: r.label })),
 ];
 
 // Extra floor rects that are part of the commons (the single hall).

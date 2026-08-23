@@ -41,7 +41,12 @@
 
 import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
-import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, doorOf, findPath } from "../map";
+import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, doorOf, findPath,
+  ANNOUNCEMENTS,
+  boardFeedOf,
+  POST_TARGETS,
+} from "../map";
+import type { RoomDef } from "../map";
 import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
@@ -199,6 +204,9 @@ export class MainRoom extends Room {
       map: MAP,
       doors: DOORS,
       rooms: ROOMS,
+      // Where the instructor may pin. Not derivable from `rooms` on the
+      // client: every office displays a board but none is a post target.
+      postTargets: POST_TARGETS,
       you: isAdmin ? null : client.sessionId,
       role: isAdmin ? "admin" : "student",
       // Redundant with `role` now that the two always agree, but kept as
@@ -636,22 +644,29 @@ export class MainRoom extends Room {
     // could not be made without an LLM round trip, and the wording was the
     // model's rather than the instructor's. Typing it is faster and exact.
     if (action === "post") {
-      const boardRoom = roomById(String(msg?.board || ""));
+      const target = POST_TARGETS.find((t) => t.id === String(msg?.board || ""));
       const text = String(msg?.text || "").trim().slice(0, 4000);
-      if (!boardRoom?.hasBoard || !text) {
-        return client.send("adminAck", { ok: false, note: "Pick a board room and keep some text." });
+      if (!target || !text) {
+        return client.send("adminAck", { ok: false, note: "Pick a board and keep some text." });
       }
-      const item = postToBoard(boardRoom.id, this.ta().name, text);
-      logEvent("board_post", { room: boardRoom.id, by: item.by, text: item.text });
-      // Everyone currently in the room sees the board refresh + a notice.
-      this.sendBoardToRoomOccupants(boardRoom.id);
-      this.deliverToRoom(boardRoom.id, {
-        from: this.ta().name,
-        id: TA_ID,
-        kind: "agent",
-        text: `(pins a note to the ${boardRoom.label} board)`,
-      });
-      client.send("adminAck", { ok: true, note: `Posted to the ${boardRoom.label} board.` });
+      const item = postToBoard(target.id, this.ta().name, text);
+      logEvent("board_post", { feed: target.id, by: item.by, text: item.text });
+      this.sendFeedToViewers(target.id);
+      if (target.id === ANNOUNCEMENTS) {
+        // No in-room chat line here. The room version below speaks as the TA,
+        // who is standing in their office; an announcement lands in six rooms
+        // the TA is not in, so a notice is the honest form.
+        this.broadcast("notice", { text: "📣 New announcement — it is on your office board." });
+        client.send("adminAck", { ok: true, note: "Announced to all students." });
+      } else {
+        this.deliverToRoom(target.id, {
+          from: this.ta().name,
+          id: TA_ID,
+          kind: "agent",
+          text: `(pins a note to the ${target.label} board)`,
+        });
+        client.send("adminAck", { ok: true, note: `Posted to the ${target.label} board.` });
+      }
       return;
     }
 
@@ -694,22 +709,32 @@ export class MainRoom extends Room {
       if (this.lastRoom.get(c.sessionId) === rid) continue;
       this.lastRoom.set(c.sessionId, rid);
       const def = rid ? roomById(rid) : undefined;
-      if (def?.hasBoard) {
-        c.send("board", { roomId: def.id, room: def.label, items: getBoard(def.id) });
-      } else {
-        c.send("board", { roomId: null });
-      }
+      if (def?.hasBoard) this.sendBoard(c, def);
+      else c.send("board", { roomId: null });
     }
   }
 
-  private sendBoardToRoomOccupants(rid: string) {
-    const def = roomById(rid);
-    if (!def?.hasBoard) return;
+  private sendBoard(c: Client, def: RoomDef) {
+    const feed = boardFeedOf(def);
+    c.send("board", {
+      roomId: def.id,
+      // The office board is the class noticeboard, not Sam's noticeboard.
+      // Titling it with the room would suggest a per-student feed, which is
+      // exactly the design we did not build.
+      room: feed === ANNOUNCEMENTS ? "Announcements" : def.label,
+      items: getBoard(feed),
+    });
+  }
+
+  // Refresh everyone currently looking at a feed. Keyed by feed rather than
+  // by room because one announcement is on show in six rooms at once.
+  private sendFeedToViewers(feed: string) {
     for (const c of this.clients) {
       const e = this.focusEntity(c);
-      if (e && roomAt(e.x, e.y) === rid) {
-        c.send("board", { roomId: def.id, room: def.label, items: getBoard(def.id) });
-      }
+      if (!e) continue;
+      const rid = roomAt(e.x, e.y);
+      const def = rid ? roomById(rid) : undefined;
+      if (def?.hasBoard && boardFeedOf(def) === feed) this.sendBoard(c, def);
     }
   }
 

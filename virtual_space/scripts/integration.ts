@@ -94,7 +94,10 @@ async function main() {
   await waitUntil(() => !!init, 6000, "init received");
   assert(typeof init.home === "string", `init names my own room: ${init.home}`);
   await waitUntil(() => !!init && world.entities.length === 7, 6000, "7 inhabitants (no avatar for the admin)");
-  assert(init.rooms.filter((r: any) => r.hasBoard).length === 2, "Library and Computer Lab have boards");
+  assert(init.rooms.filter((r: any) => r.hasBoard).length === 8,
+    "8 boards: six offices showing the class announcements, plus the Library and Computer Lab");
+  assert(init.postTargets.map((t: any) => t.id).join(",") === "announcements,library,computer-lab",
+    "…but only three places to post: an office is not a post target");
   assert(!init.rooms.some((r: any) => r.forcedSkill || r.modeLabel), "no room advertises a TA mode any more");
   assert(init.rooms.find((r: any) => r.id === "office-ta")?.soloOccupancy === true, "TA office is solo-occupancy");
 

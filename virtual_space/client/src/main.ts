@@ -47,6 +47,9 @@ type InitMsg = {
   email: string;
   name: string;
   agents: { key: string; name: string }[];
+  // Boards the instructor may pin to. Deliberately not the same set as the
+  // rooms that display one — see MainRoom.
+  postTargets: { id: string; label: string }[];
   shut: string[]; // solo-occupancy rooms currently taken
   home: string | null; // your own room; null for the admin, who has no avatar
 };
@@ -343,6 +346,7 @@ class WorldScene extends Phaser.Scene {
         desk(r.x1 + 0.6, r.y1 + 0.6);
         chair(r.x1 + 1.4, r.y1 + 2.1);
         plant(r.x2 + 0.5, r.y1 + 0.6);
+        pinboard(r.x1 + 3.4, r.y1 + 3.6); // the announcements board
       } else if (r.id === "classroom") {
         g.fillStyle(0xdfe6f5, 0.85); // whiteboard along the top wall
         g.fillRect((r.x1 + 0.7) * T, r.y1 * T + 4, (r.x2 - r.x1 - 1.4) * T, T * 0.35);
@@ -626,11 +630,14 @@ function wirePanel() {
     agentSel.appendChild(o);
   }
   agentSel.value = "ta";
+  // Post targets come from the server, not from `rooms.hasBoard`: all six
+  // offices display a board, and none of them is a place to post — they show
+  // the one class-wide feed.
   const boardSel = $<HTMLSelectElement>("board-sel");
-  for (const r of init.rooms.filter((r) => r.hasBoard)) {
+  for (const t of init.postTargets) {
     const o = document.createElement("option");
-    o.value = r.id;
-    o.textContent = r.label;
+    o.value = t.id;
+    o.textContent = t.label;
     boardSel.appendChild(o);
   }
 
