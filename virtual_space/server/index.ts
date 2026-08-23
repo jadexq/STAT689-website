@@ -3,6 +3,7 @@
 
 import "./env"; // MUST be first — see env.ts
 import path from "path";
+import fs from "fs/promises";
 import { createServer } from "http";
 import express from "express";
 import compression from "compression";
@@ -38,6 +39,33 @@ app.get("/api/materials", async (_req, res) => {
     // page: the TA brain being down must not take the campus with it.
     console.error(`[space] materials list: ${(err as Error).message}`);
     res.status(502).json({ readings: [], error: "The reading list is unavailable right now." });
+  }
+});
+
+// ---------- the project repositories ----------
+// Config, not a board post: a pinned link would die with the next
+// boards.json wipe (open-issues D7 wipes state before the first class),
+// and a repo list is the sort of thing that should survive that. Read from
+// disk per request rather than at boot, so editing repos.json is an edit,
+// not a restart — the same reasoning as the readings manifest.
+
+interface RepoCard {
+  name: string;
+  description: string;
+  url: string;
+}
+
+app.get("/api/repos", async (_req, res) => {
+  try {
+    const raw = await fs.readFile(path.join(__dirname, "repos.json"), "utf8");
+    const parsed = JSON.parse(raw) as { repos?: RepoCard[] };
+    const repos = (parsed.repos ?? []).filter((r) => r?.name && r?.url);
+    res.json({ repos });
+  } catch (err) {
+    // A missing or malformed repos.json is an empty Computer Lab card, not a
+    // 500: the room still works, it just has nothing to show.
+    console.error(`[space] repos: ${(err as Error).message}`);
+    res.json({ repos: [] });
   }
 });
 

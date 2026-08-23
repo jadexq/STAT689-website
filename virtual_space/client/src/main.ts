@@ -670,15 +670,60 @@ async function renderShelf(show: boolean) {
   }
 }
 
+// The Computer Lab's repo cards. Config on the server, not a pinned post,
+// so the list outlives a boards.json wipe. Same fetch-on-entry shape as the
+// shelf, and the same .shelf-item styling — two boards, one card idiom.
+type RepoCard = { name: string; description: string; url: string };
+
+async function renderRepos(show: boolean) {
+  const wrap = $<HTMLDivElement>("repos-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  const list = $<HTMLDivElement>("repos");
+  let repos: RepoCard[];
+  try {
+    repos = ((await (await fetch("/api/repos")).json()) as { repos?: RepoCard[] }).repos ?? [];
+  } catch {
+    repos = [];
+  }
+  list.innerHTML = "";
+  if (!repos.length) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = "No project repositories posted yet.";
+    list.appendChild(d);
+    return;
+  }
+  for (const r of repos) {
+    const d = document.createElement("div");
+    d.className = "shelf-item";
+    const a = document.createElement("a");
+    a.href = r.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = r.name;
+    d.appendChild(a);
+    if (r.description) {
+      const p = document.createElement("span");
+      p.className = "desc";
+      p.textContent = r.description;
+      d.appendChild(p);
+    }
+    list.appendChild(d);
+  }
+}
+
 function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {
   const card = $<HTMLDivElement>("board-card");
   if (!msg.roomId) {
     card.style.display = "none";
     void renderShelf(false);
+    void renderRepos(false);
     return;
   }
   card.style.display = "block";
   void renderShelf(msg.roomId === "library");
+  void renderRepos(msg.roomId === "computer-lab");
   $<HTMLDivElement>("board-title").textContent = `📌 ${msg.room} board`;
   const list = $<HTMLDivElement>("board-list");
   list.innerHTML = "";

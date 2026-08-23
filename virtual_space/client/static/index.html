@@ -72,6 +72,10 @@
   .shelf-item a:hover { text-decoration: underline; }
   .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
   .shelf-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
+  #repos-wrap { display: none; border-bottom: 1px solid var(--line); }
+  #repos-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }
+  #repos { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .shelf-item .desc { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
   #upnext { padding: 0 14px 8px; display: flex; flex-direction: column; gap: 6px; }
   .upnext-row { font-size: 12.5px; color: var(--muted); }
   .upnext-row b { color: var(--ink); font-weight: 600; }
@@ -164,6 +168,12 @@
         <div id="shelf-title">📚 Course material</div>
         <div id="upnext"></div>
         <div id="shelf"></div>
+      </div>
+      <!-- The Computer Lab's repo cards. Same shelf idiom, different room:
+           a card per repository instead of a raw pasted link. -->
+      <div id="repos-wrap">
+        <div id="repos-title">💻 Project repositories</div>
+        <div id="repos"></div>
       </div>
       <div id="board-title">📌 Board</div>
       <div id="board-list"></div>
