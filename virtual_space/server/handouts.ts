@@ -241,3 +241,84 @@ export async function updateStudentFile(
     return next;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Which version this student reads
+// ---------------------------------------------------------------------------
+
+/**
+ * The rotation: `(studentIndex + sectionIndex) % versions.length`.
+ *
+ * At six students and six versions this is an exact Latin square — within any
+ * one section the six students hold the six versions between them, and every
+ * version is read the same number of times by a different student each time.
+ * That is what keeps a version effect separable from a rater effect at one
+ * judgement per cell, which a random draw only approaches in expectation and
+ * never reaches at n=6.
+ *
+ * The same expression degrades correctly when the instructor narrows to three
+ * versions or two: three readers per version, or two. Exploration and
+ * replication are the same code.
+ */
+export function rotationVersion(studentIdx: number, sectionIdx: number, versions: string[]): string {
+  return versions[(studentIdx + sectionIdx) % versions.length];
+}
+
+export type Assignment =
+  | { kind: "student"; hash: string; assigned: Record<string, string> }
+  | { kind: "preview"; version: string }
+  | { kind: "off-roster" };
+
+/**
+ * Resolve — and persist — what this reader sees.
+ *
+ * Three readers, three answers:
+ *
+ *  - a roster student gets the rotation, WRITTEN DOWN at first render and read
+ *    back forever after. Re-deriving it per request is the same class of bug as
+ *    recomputing a sticky readingId: it works until the inputs change, and then
+ *    it rewrites history.
+ *  - the admin gets a preview. They have no slot and no avatar, and the handout
+ *    page is where they check rendering — so `?version=` selects, and nothing
+ *    is recorded.
+ *  - anyone else is refused. NOT quietly given slot 0: that is a real student's
+ *    rotation, and two people on one rotation destroys the balance the whole
+ *    design rests on. The fix is a one-line STUDENTS change.
+ */
+export async function resolveAssignment(
+  bundle: Bundle,
+  email: string,
+  isAdmin: boolean,
+  wantVersion?: unknown
+): Promise<Assignment> {
+  if (isAdmin) {
+    const want = String(wantVersion ?? "").trim();
+    return { kind: "preview", version: bundle.versions.includes(want) ? want : bundle.versions[0] };
+  }
+  const idx = studentIndex(email);
+  if (idx === undefined) return { kind: "off-roster" };
+
+  const hash = studentHash(email);
+  const file = await updateStudentFile(bundle.handout_id, hash, (f) => {
+    let changed = false;
+    for (const [sectionIdx, s] of bundle.sections.entries()) {
+      const recorded = f.assigned[s.section_id];
+      // A recorded version whose body is no longer in the bundle means the
+      // instructor narrowed `versions` after this student had already been
+      // assigned. Re-rotate rather than render a blank section, and say so —
+      // the earlier records still carry their own content_sha, so the dataset
+      // splits rather than lying.
+      if (recorded && s.bodies[recorded]) continue;
+      if (recorded) {
+        console.warn(
+          `[handouts] ${bundle.handout_id}/${s.section_id}: version "${recorded}" is gone from the ` +
+            `bundle; re-assigning. Narrowing versions after data exists splits the dataset.`
+        );
+      }
+      f.assigned[s.section_id] = rotationVersion(idx, sectionIdx, bundle.versions);
+      changed = true;
+    }
+    return changed ? f : null;
+  });
+  return { kind: "student", hash, assigned: file!.assigned };
+}

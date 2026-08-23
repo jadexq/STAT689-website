@@ -15,7 +15,7 @@ import { marked } from "marked";
 
 marked.setOptions({ gfm: true, breaks: false });
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -25,7 +25,7 @@ function escapeHtml(s: string): string {
 
 // Styling is inline and self-contained: the page opens in its own tab and
 // must not depend on the campus bundle having loaded.
-const CSS = `
+export const BASE_CSS = `
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
 body {
@@ -67,9 +67,15 @@ hr { border: 0; border-top: 1px solid #2a3145; margin: 2em 0; }
 img { max-width: 100%; height: auto; }
 `;
 
+// Wide tables get their own scroll box rather than pushing the page sideways.
+// Exported because the handout page needs the same treatment and forking the
+// pipeline is how the two drift apart.
+export function wrapTables(html: string): string {
+  return html.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, "</table></div>");
+}
+
 export function renderMarkdownPage(title: string, markdown: string): string {
-  let body = marked.parse(markdown, { async: false }) as string;
-  body = body.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, "</table></div>");
+  const body = wrapTables(marked.parse(markdown, { async: false }) as string);
   const t = escapeHtml(title);
   return `<!doctype html>
 <html lang="en">
@@ -77,7 +83,7 @@ export function renderMarkdownPage(title: string, markdown: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${t}</title>
-<style>${CSS}</style>
+<style>${BASE_CSS}</style>
 </head>
 <body>
 <main>

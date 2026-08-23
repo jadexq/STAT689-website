@@ -15,7 +15,20 @@ import { identify, identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
 import { taAgenda, taMaterialFile, taMaterials, taUpload } from "./ta";
 import { renderMarkdownPage } from "./render";
-import { saltState, saveBundle, validateBundle, type Bundle } from "./handouts";
+import {
+  listBundles,
+  loadBundle,
+  loadStudentFile,
+  resolveAssignment,
+  safeId,
+  saltState,
+  saveBundle,
+  studentHash,
+  studentIndex,
+  validateBundle,
+  type Bundle,
+} from "./handouts";
+import { renderHandoutPage } from "./handout-render";
 
 const PORT = Number(process.env.PORT || 2567);
 
@@ -31,6 +44,18 @@ app.use(compression());
 app.use("/api/handouts", express.json({ limit: "8mb" }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "client", "static")));
+// KaTeX's stylesheet and ~1 MB of woff2, served straight from the installed
+// package. Copying them into client/static/ would put a megabyte of binaries
+// in git for no gain: katex is a runtime dependency, so `npm prune --omit=dev`
+// in the Dockerfile leaves it in place. Handout pages are the only pages that
+// link it, and the browser caches it after the first one.
+app.use(
+  "/katex",
+  express.static(path.join(path.dirname(require.resolve("katex/package.json")), "dist"), {
+    maxAge: "7d",
+    immutable: true,
+  })
+);
 
 // ---------- the course corpus, proxied ----------
 // The readings live with the TA and only the TA indexes them, but the TA's
@@ -195,6 +220,107 @@ app.post("/api/handouts", async (req, res) => {
   } catch (err) {
     console.error(`[space] handout upload: ${(err as Error).message}`);
     res.status(500).json({ ok: false, note: "Could not store that handout." });
+  }
+});
+
+// The list a reader may open, for the 📝 Handouts panel. Every handout goes to
+// every student — the versions differ, the reading list does not — so this is
+// "what exists", plus how far this reader has got with each.
+app.get("/api/handouts", async (req, res) => {
+  try {
+    const who = await identify(req, req.query.as).catch(() => null);
+    if (!who) {
+      res.status(401).json({ handouts: [] });
+      return;
+    }
+    const salt = saltState();
+    if (!salt.ok) {
+      res.status(503).json({ handouts: [], note: salt.note });
+      return;
+    }
+    const bundles = await listBundles();
+    const offRoster = !who.isAdmin && studentIndex(who.email) === undefined;
+    const hash = offRoster || who.isAdmin ? null : studentHash(who.email);
+    const handouts = [];
+    for (const b of bundles) {
+      const file = hash ? await loadStudentFile(b.handout_id, hash) : null;
+      handouts.push({
+        id: b.handout_id,
+        title: b.title,
+        chapter: b.chapter,
+        term: b.term,
+        sections: b.sections.length,
+        graded: file ? Object.keys(file.records).length : 0,
+      });
+    }
+    res.json({
+      handouts,
+      // The panel shows in the reader's home room, which for anyone unassigned
+      // is the Common Area — so this is the one place they find out why the
+      // links will not open, rather than discovering it on a 403.
+      ...(offRoster
+        ? { note: "You are not on the class roster yet, so no version has been assigned to you. Tell the instructor." }
+        : {}),
+    });
+  } catch (err) {
+    console.error(`[space] handout list: ${(err as Error).message}`);
+    res.status(500).json({ handouts: [] });
+  }
+});
+
+// The handout itself. Identity decides the version, and the version is written
+// down at first render rather than recomputed — see resolveAssignment().
+app.get("/handout/:id", async (req, res) => {
+  const page = (status: number, msg: string) =>
+    res.status(status).type("html").send(renderMarkdownPage("Handout", msg));
+  let who;
+  try {
+    who = await identify(req, req.query.as);
+  } catch {
+    page(401, "# Not signed in\n\nCould not verify who you are.");
+    return;
+  }
+  try {
+    const salt = saltState();
+    if (!salt.ok) {
+      page(503, `# Handouts are unavailable\n\n${salt.note}`);
+      return;
+    }
+    const id = safeId(req.params.id);
+    const bundle = id ? await loadBundle(id) : null;
+    if (!bundle) {
+      page(404, "# No such handout\n\nThat handout does not exist, or has not been uploaded yet.");
+      return;
+    }
+    const a = await resolveAssignment(bundle, who.email, who.isAdmin, req.query.version);
+    if (a.kind === "off-roster") {
+      // Loudly, and not by quietly handing over slot 0's rotation: two people
+      // on one rotation destroys the balance the whole design rests on.
+      logEvent("handout_off_roster", { email: who.email, id: bundle.handout_id });
+      page(
+        403,
+        `# You are not on the class roster\n\n**${who.email}** has no student slot, so no version of ` +
+          `this handout has been assigned to you.\n\nThis is a one-line fix on the instructor's side ` +
+          `(the \`STUDENTS\` setting) — tell them which address you signed in with.`
+      );
+      return;
+    }
+    logEvent("handout_open", {
+      email: who.email,
+      id: bundle.handout_id,
+      mode: a.kind,
+      ...(a.kind === "preview" ? { version: a.version } : {}),
+    });
+    res.type("html").send(
+      renderHandoutPage({
+        bundle,
+        assigned: a.kind === "student" ? a.assigned : {},
+        preview: a.kind === "preview" ? a.version : undefined,
+      })
+    );
+  } catch (err) {
+    console.error(`[space] handout page: ${(err as Error).message}`);
+    page(500, "# That handout could not be opened\n\nTry again in a moment.");
   }
 });
 

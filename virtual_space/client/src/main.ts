@@ -713,17 +713,75 @@ async function renderRepos(show: boolean) {
   }
 }
 
+// The student's own handouts, shown in their home room. Third use of the
+// fetch-on-entry idiom, after the Library shelf (2b) and the repo cards (3a):
+// no websocket message, no room state, no MainRoom involvement.
+//
+// Home room rather than "their office" on purpose. init.home is the Common
+// Area for anyone not yet on the roster, and that is exactly the person who
+// needs to be told why their links will not open — a panel that only appears
+// in an office they do not have would leave them with no signal at all.
+type HandoutCard = { id: string; title: string; chapter: string; term: string; sections: number; graded: number };
+
+async function renderHandouts(show: boolean) {
+  const wrap = $<HTMLDivElement>("handouts-wrap");
+  wrap.style.display = show ? "block" : "none";
+  if (!show) return;
+  const list = $<HTMLDivElement>("handouts");
+  let data: { handouts?: HandoutCard[]; note?: string };
+  try {
+    data = (await (await fetch("/api/handouts")).json()) as { handouts?: HandoutCard[]; note?: string };
+  } catch {
+    data = {};
+  }
+  const handouts = data.handouts ?? [];
+  list.innerHTML = "";
+  if (data.note) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = data.note;
+    list.appendChild(d);
+  }
+  if (!handouts.length) {
+    const d = document.createElement("div");
+    d.className = "shelf-note";
+    d.textContent = "No handouts yet.";
+    list.appendChild(d);
+    return;
+  }
+  for (const h of handouts) {
+    const d = document.createElement("div");
+    d.className = "handout-item";
+    const a = document.createElement("a");
+    a.href = `/handout/${encodeURIComponent(h.id)}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = h.title;
+    d.appendChild(a);
+    const p = document.createElement("span");
+    const done = h.graded >= h.sections;
+    p.className = "prog" + (done ? " done" : "");
+    p.textContent = done
+      ? `${h.chapter} · all ${h.sections} sections graded — thank you`
+      : `${h.chapter} · ${h.graded} of ${h.sections} sections graded`;
+    d.appendChild(p);
+    list.appendChild(d);
+  }
+}
+
 function renderBoard(msg: { roomId: string | null; room?: string; items?: { by: string; text: string; ts: string }[] }) {
   const card = $<HTMLDivElement>("board-card");
   if (!msg.roomId) {
     card.style.display = "none";
     void renderShelf(false);
     void renderRepos(false);
+    void renderHandouts(false);
     return;
   }
   card.style.display = "block";
   void renderShelf(msg.roomId === "library");
   void renderRepos(msg.roomId === "computer-lab");
+  void renderHandouts(!!init?.home && msg.roomId === init.home);
   $<HTMLDivElement>("board-title").textContent = `📌 ${msg.room} board`;
   const list = $<HTMLDivElement>("board-list");
   list.innerHTML = "";
