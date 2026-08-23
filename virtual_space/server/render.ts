@@ -18,10 +18,13 @@ import { Marked, type TokenizerAndRendererExtension } from "marked";
 // This used to live only in handout-render.ts, on the reasoning that a course
 // reading saying "$5 and $10 in the same line" must keep saying that rather
 // than quietly becoming a formula. The guard in `mathInline` is what actually
-// buys that, though, not the separation — and the separation cost more than
-// it bought: `transformer-notes.md`, a real reading in the corpus, renders
-// its formulas as raw `$x_1 \dots x_t$` to students. One dialect, one
-// implementation, so the two pages cannot drift.
+// buys that, though, not the separation.
+//
+// Pre-emptive, not a bug report: no reading in the corpus uses math today.
+// But the course is attention and transformers, the handout page already sets
+// equations, and a reading that picks up a `$…$` under the old split would
+// have shown it raw with nothing to catch it. One dialect, one implementation,
+// so the two pages cannot drift.
 
 // throwOnError:false renders a malformed expression in red instead of taking
 // the whole page down. One typo in one formula must not blank the page.
