@@ -58,3 +58,40 @@ export async function taListen(text: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`TA listen HTTP ${res.status}`);
 }
+
+// ---------- the course corpus ----------
+// The TA owns the corpus: virtual_ta/materials/ plus its manifest is what
+// searchMaterials indexes. A second copy on this side, for the Library to
+// render from, would drift within a month — so the Library renders whatever
+// the TA reports. One list, two consumers. These two calls are the bridge,
+// and they exist only because the TA's port is not reachable from a browser.
+
+export interface TaReading {
+  id: string;
+  title: string;
+  link?: string;
+  format: string; // "md" | "html" | "pdf" | …
+}
+
+export async function taMaterials(): Promise<TaReading[]> {
+  const res = await fetch(`${TA_BASE}/api/materials`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`TA materials HTTP ${res.status}`);
+  const body = (await res.json()) as { readings?: TaReading[] };
+  return body.readings ?? [];
+}
+
+// Null means "no such reading", which is a 404 to the student rather than an
+// error — an id can go stale when the instructor edits the manifest.
+export async function taMaterialFile(
+  id: string
+): Promise<{ bytes: Buffer; type: string } | null> {
+  const res = await fetch(`${TA_BASE}/api/materials/${encodeURIComponent(id)}/file`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`TA material HTTP ${res.status}`);
+  return {
+    bytes: Buffer.from(await res.arrayBuffer()),
+    type: res.headers.get("content-type") || "application/octet-stream",
+  };
+}

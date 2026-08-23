@@ -74,6 +74,27 @@ export async function loadReading(id: string): Promise<{ reading: Reading; text:
   return { reading, text };
 }
 
+// What the file is, for a consumer that has to decide how to present it.
+export function formatOf(reading: Reading): string {
+  return path.extname(reading.file).replace(/^\./, "").toLowerCase();
+}
+
+// The file itself, unprocessed. Serving it is the virtual space's job — this
+// port is not reachable from a browser — so the bytes leave here as they are
+// on disk and the space decides how to render them.
+export async function readingFile(
+  id: string
+): Promise<{ reading: Reading; bytes: Buffer; format: string } | null> {
+  const reading = (await listReadings()).find((r) => r.id === id);
+  if (!reading) return null;
+  const filePath = path.join(MATERIALS_DIR, reading.file);
+  // Same guard as rawText: a manifest entry must not reach outside the corpus.
+  if (path.relative(MATERIALS_DIR, filePath).startsWith("..")) return null;
+  const bytes = await readFile(filePath).catch(() => null);
+  if (!bytes) return null;
+  return { reading, bytes, format: formatOf(reading) };
+}
+
 // Match a reading the student named in free text, by title words, id, or link.
 export async function matchReading(message: string): Promise<Reading | null> {
   const readings = await listReadings();

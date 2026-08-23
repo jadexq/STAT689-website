@@ -8,7 +8,7 @@ import express from "express";
 import compression from "compression";
 import path from "node:path";
 import { llmInfo } from "./llm.ts";
-import { listReadings } from "./materials.ts";
+import { formatOf, listReadings, readingFile } from "./materials.ts";
 import { OUTPUT_DIR } from "./paths.ts";
 import { appendClassTranscriptLine, initStorage, logTurn } from "./logger.ts";
 import {
@@ -51,7 +51,33 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/materials", async (_req, res) => {
   const readings = await listReadings();
-  res.json({ readings: readings.map(({ id, title, link }) => ({ id, title, link })) });
+  res.json({
+    readings: readings.map((r) => ({ id: r.id, title: r.title, link: r.link, format: formatOf(r) })),
+  });
+});
+
+// The bytes of one reading. This port binds to 127.0.0.1, so no browser
+// reaches it — the virtual space proxies this route and does the rendering,
+// because the space is the only process a student can talk to. `:id` is
+// looked up in the manifest rather than joined onto a path, so nothing here
+// widens the file-system surface that listReadings() already exposes.
+const MIME: Record<string, string> = {
+  md: "text/markdown; charset=utf-8",
+  markdown: "text/markdown; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  htm: "text/html; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  pdf: "application/pdf",
+};
+
+app.get("/api/materials/:id/file", async (req, res) => {
+  const found = await readingFile(String(req.params.id));
+  if (!found) {
+    res.status(404).json({ error: "no such reading" });
+    return;
+  }
+  res.setHeader("content-type", MIME[found.format] ?? "application/octet-stream");
+  res.send(found.bytes);
 });
 
 app.post("/api/listen", async (req, res) => {
