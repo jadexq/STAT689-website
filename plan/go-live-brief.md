@@ -6,10 +6,35 @@
 > only as `<test-2>` / `<Test2Name>`; the real address is recoverable from
 > `gcloud iap web get-iam-policy`. The instructor's own addresses are written out.
 
+> ## ⚠️ THIS FILE GOES STALE. VERIFY BEFORE YOU ACT ON IT.
+>
+> It is a **dated snapshot of a running system**, not a specification. Every fact below was
+> true at **2026-08-23 21:50Z** and has been decaying since. Nothing updates it automatically:
+> a deploy, an env change, an IAP grant, or a class starting all invalidate parts of it
+> silently, and it will still read as confident and current.
+>
+> **Especially untrustworthy after any deploy:** the serving revision, `STUDENTS` / `ROSTER`,
+> the startup line, the rollback targets, the bucket contents, the IAP accessor list, and every
+> commit hash. **Re-read live state first** — one command, thirty seconds:
+>
+> ```
+> gcloud run services describe stat689 --region=us-central1 --project=stat689 --format=json
+> gcloud iap web get-iam-policy --resource-type=cloud-run --service=stat689 --region=us-central1 --project=stat689
+> gcloud storage ls -r 'gs://stat689-data/**' --project=stat689
+> git log --oneline -3 && git status --short
+> ```
+>
+> **If what you see disagrees with this file, this file is wrong.** Fix it or delete it; do not
+> reconcile reality to it.
+>
+> **Retire it once the class is running.** Its whole job is to carry state across a context
+> compaction during setup. When items 2-6 are done it has no reason to exist, and a stale
+> "current state" doc is worse than none — the durable content already lives elsewhere.
+
 **Scope:** current deployed state and the numbered actions left, as of the date above. The
 durable checklist — per-student runbook, what to tell the class, what not to change — is
-[`go-live.md`](./go-live.md); this file is its current-state companion and goes stale.
-Deployment history is [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15.
+[`go-live.md`](./go-live.md), and **that** is the file to trust and keep. Deployment history is
+[`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15.
 
 ## Accounts
 - second test account : `<test-2>` — REMOVED from the roster 2026-08-23 21:42Z, but STILL
@@ -18,7 +43,7 @@ Deployment history is [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15.
 - admin                : jadexqwang@gmail.com
 - salt (recoverable)   : `gcloud secrets versions access latest --secret=handout-salt --project=stat689`
 
-## Live state, verified 21:50Z — do not re-derive, but re-check before acting
+## Live state — TRUE AT 2026-08-23 21:50Z, NOT NECESSARILY NOW (see the banner)
 - serving `stat689-00005-5db` at 100%, url https://stat689-56ctiriivq-uc.a.run.app
 - `STUDENTS=jadewang@tamu.edu=s6`, `ROSTER=jadewang@tamu.edu:Tester`, `ADMIN_EMAILS=jadexqwang@gmail.com`
 - startup line: `Roster: 6 student slots — 1 assigned (Tester), 5 played by stand-ins (Sam, Ben, Chloe, Dev, Grace)`

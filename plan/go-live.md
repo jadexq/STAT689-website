@@ -6,6 +6,10 @@
 > history outlives that decision. Real addresses go straight to `gcloud`, never into this file.
 > Placeholders below are `<student-N>` / `<StudentNName>`.
 
+> **This is the durable half.** Its companion [`go-live-brief.md`](./go-live-brief.md) holds a
+> dated snapshot of deployed state — revisions, env values, commit hashes — and goes stale by
+> design. Keep this file; retire that one once the class is running.
+
 **Scope:** everything between "the app is deployed" and "students are using it". Deployment
 itself is done — see [`gcp-deployment-plan.md`](./gcp-deployment-plan.md) §15 for how the
 service is built and §15l for rollback. Live status of individual issues lives in
