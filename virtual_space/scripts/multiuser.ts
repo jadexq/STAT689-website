@@ -85,10 +85,11 @@ interface Joined {
   world: Entity[];
   chats: any[];
   acks: { ok: boolean; note: string }[];
+  notices: { text: string }[];
 }
 
 async function join(client: Client, devUser: string, role?: "admin"): Promise<Joined> {
-  const j: Joined = { room: null as any, init: null, world: [], chats: [], acks: [] };
+  const j: Joined = { room: null as any, init: null, world: [], chats: [], acks: [], notices: [] };
   j.room = await client.joinOrCreate("main", { devUser, ...(role ? { role } : {}) });
   j.room.onMessage("init", (m: Init) => (j.init = m));
   j.room.onMessage("world", (m: { entities: Entity[] }) => (j.world = m.entities));
@@ -100,7 +101,8 @@ async function join(client: Client, devUser: string, role?: "admin"): Promise<Jo
   j.room.onMessage("adminAck", (m) => j.acks.push(m));
   j.room.onMessage("board", () => {});
   j.room.onMessage("typing", () => {});
-  j.room.onMessage("notice", () => {});
+  j.room.onMessage("notice", (m) => j.notices.push(m));
+  j.room.onMessage("doors", () => {});
   await waitUntil(() => !!j.init, 5000, `joined as ${devUser}${role ? ` (requesting ${role})` : ""}`);
   return j;
 }
@@ -196,9 +198,23 @@ async function main() {
   await sayUntilAnswered(ana, "Hi TA, this is Ana.", "Ana");
   assert(fs.existsSync(files[0]), "Ana has a conversation file of their own");
 
+  console.log("\n6. One student at a time — the door is shut behind Ana");
+  const nMark = omar.notices.length;
   omar.room.send("goto", spawn("office-ta"));
-  await waitUntil(() => inTaOffice(omar), 30000, "Omar reached the TA office");
-  // Omar retries for the same reason: TA may still be finishing Ana.
+  await waitUntil(() => omar.notices.length > nMark, 8000, "Omar was told the door is shut");
+  assert(/occupied|shut/i.test(omar.notices[nMark].text), "…and told why, not silently ignored");
+  assert(/Ana/.test(omar.notices[nMark].text), "…and by whom");
+  await wait(1500);
+  assert(!inTaOffice(omar), "Omar did not get in while Ana was inside");
+
+  console.log("\n7. The door reopens when Ana leaves");
+  ana.room.send("goto", spawn("commons"));
+  await waitUntil(() => !inTaOffice(ana), 30000, "Ana walked out");
+  omar.room.send("goto", spawn("office-ta"));
+  await waitUntil(() => inTaOffice(omar), 30000, "Omar got in once the office was free");
+  // No retry loop needed for busy-ness any more: with one visitor at a time
+  // the TA cannot be mid-answer for somebody else when Omar speaks. The
+  // helper stays because the TA can still be slow, not because messages drop.
   await sayUntilAnswered(omar, "Hi TA, this is Omar.", "Omar");
   await waitUntil(() => fs.existsSync(files[1]), 60000, "Omar has a conversation file of their own");
 

@@ -24,13 +24,19 @@
 // features that depend on it (walk-in access, one student at a time) both
 // collapse without it. See plan/app-changes.md, 2026-08-22.
 //
+// ONE STUDENT AT A TIME. The TA office admits a single human; the door
+// shuts behind them and the next student has to wait. The TA already served
+// one caller at a time (AgentRuntime.busy) — the queue existed, it was just
+// invisible, and a second student's message vanished into it (open-issues
+// E2). This moves the wait to the threshold, where it can be explained.
+//
 // The TA's replies come from the Virtual TA brain (ta.ts), one session per
 // student. Board posts are written by the instructor and pinned to a
 // room's board — students see the board when they walk in.
 
 import type { IncomingMessage } from "http";
 import { Room, Client } from "colyseus";
-import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, findPath } from "../map";
+import { MAP, TILE, DOORS, ROOMS, walkable, roomAt, roomById, doorOf, findPath } from "../map";
 import { AGENTS, TA_ID, AgentDef, agentReply, agentCompose, HistoryEntry } from "../agents";
 import { taChat, taListen, type TaWho } from "../ta";
 import { getBoard, postToBoard } from "../boards";
@@ -77,6 +83,8 @@ export class MainRoom extends Room {
   private history = new Map<string, HistoryEntry[]>(); // per map-room chat log
   private walkers = new Map<string, { clear: () => void }>(); // entity id -> active walk
   private lastRoom = new Map<string, string | null>(); // client -> room of their focus entity
+  private soloRooms = ROOMS.filter((r) => r.soloOccupancy);
+  private lastShut = ""; // last broadcast door state, to avoid re-sending it
 
   onCreate() {
     this.autoDispose = false;
@@ -163,12 +171,26 @@ export class MainRoom extends Room {
       email: id.email,
       name: id.name,
       agents: AGENTS.map((a) => ({ key: a.key, name: a.name })),
+      // Current state, because `doors` is only broadcast on change.
+      shut: this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id),
     });
     this.broadcastWorld();
   }
 
   async onLeave(client: Client, consented?: boolean) {
     const p = this.players.get(client.sessionId);
+    // Vacate a solo room IMMEDIATELY, before the reconnect hold. The seat is
+    // worth keeping for RECONNECT_WINDOW_S; the door is not — holding it for
+    // two minutes on every dropped laptop lid locks everyone else out for a
+    // person who is not there.
+    if (p && this.soloRooms.some((r) => roomAt(p.x, p.y) === r.id)) {
+      this.stopWalk(p.id);
+      const home = roomById("office-jade")!;
+      p.x = home.spawn.x;
+      p.y = home.spawn.y;
+      logEvent("solo_vacated", { who: p.name, reason: "disconnect" });
+      this.broadcastWorld();
+    }
     if (!consented) {
       try {
         await this.allowReconnection(client, RECONNECT_WINDOW_S);
@@ -224,6 +246,9 @@ export class MainRoom extends Room {
     const nx = e.x + dx;
     const ny = e.y + dy;
     if (!walkable(nx, ny)) return;
+    if (this.blockedFor(e.id).has(`${nx},${ny}`)) {
+      return this.notice(client, this.shutMsg(roomAt(nx, ny) || "office-ta"));
+    }
     e.x = nx;
     e.y = ny;
     this.broadcastMove(e);
@@ -236,9 +261,57 @@ export class MainRoom extends Room {
     const tx = Math.floor(Number(msg?.x));
     const ty = Math.floor(Number(msg?.y));
     if (!walkable(tx, ty)) return;
-    const path = findPath({ x: e.x, y: e.y }, { x: tx, y: ty });
+    const blocked = this.blockedFor(e.id);
+    if (blocked.has(`${tx},${ty}`)) {
+      return this.notice(client, this.shutMsg(roomAt(tx, ty) || "office-ta"));
+    }
+    const path = findPath({ x: e.x, y: e.y }, { x: tx, y: ty }, blocked);
     if (!path || !path.length) return;
     this.walk(e, path, 130);
+  }
+
+  // ---------- solo-occupancy doors ----------
+
+  // Humans only. The TA lives in there, and a virtual student the instructor
+  // sends in is not a visitor queueing for the TA's attention.
+  private occupantOf(rid: string): Entity | undefined {
+    for (const p of this.players.values()) if (roomAt(p.x, p.y) === rid) return p;
+    return undefined;
+  }
+
+  // Tiles this player may not enter right now. The door alone would be
+  // enough today (it is the only way in), but blocking the interior too
+  // means the rule still holds if anything ever places an avatar directly.
+  private blockedFor(playerId: string): Set<string> {
+    const out = new Set<string>();
+    for (const r of this.soloRooms) {
+      const occ = this.occupantOf(r.id);
+      if (!occ || occ.id === playerId) continue; // free, or it is their own
+      const d = doorOf(r.id);
+      if (d) out.add(`${d.x},${d.y}`);
+      for (let y = r.y1; y <= r.y2; y++) for (let x = r.x1; x <= r.x2; x++) out.add(`${x},${y}`);
+    }
+    return out;
+  }
+
+  private shutMsg(rid: string): string {
+    const occ = this.occupantOf(rid);
+    const label = roomById(rid)?.label ?? rid;
+    return `The ${label} door is shut — ${occ ? occ.name : "someone"} is in with the TA. Try again in a few minutes.`;
+  }
+
+  // Broadcast only when the set of shut doors CHANGES. Movement is a delta
+  // for a reason (see broadcastMove); a per-step door frame would undo that.
+  private checkDoors() {
+    const shut = this.soloRooms.filter((r) => !!this.occupantOf(r.id)).map((r) => r.id);
+    const key = shut.join(",");
+    if (key === this.lastShut) return;
+    this.lastShut = key;
+    this.broadcast("doors", { shut });
+  }
+
+  private clientOf(entityId: string): Client | undefined {
+    return this.clients.find((c) => c.sessionId === entityId);
   }
 
   // The one place the "TA never moves" rule is enforced. Both movement
@@ -263,6 +336,14 @@ export class MainRoom extends Room {
         return;
       }
       const step = path[i++];
+      // Re-checked every step, not just at the start: the room can be
+      // claimed by someone closer while this walk is still in progress.
+      if (entity.kind === "human" && this.blockedFor(entity.id).has(`${step.x},${step.y}`)) {
+        this.stopWalk(entity.id);
+        const c = this.clientOf(entity.id);
+        if (c) this.notice(c, this.shutMsg(roomAt(step.x, step.y) || "office-ta"));
+        return;
+      }
       entity.x = step.x;
       entity.y = step.y;
       this.broadcastMove(entity);
@@ -526,6 +607,7 @@ export class MainRoom extends Room {
   private broadcastMove(entity: { id: string; x: number; y: number }) {
     this.broadcast("moved", { id: entity.id, x: entity.x, y: entity.y });
     this.checkBoards();
+    this.checkDoors();
   }
 
   private broadcastWorld() {
@@ -535,6 +617,7 @@ export class MainRoom extends Room {
     ];
     this.broadcast("world", { entities });
     this.checkBoards();
+    this.checkDoors();
   }
 
   private occupantNames(rid: string): string[] {

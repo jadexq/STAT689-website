@@ -47,6 +47,7 @@ type InitMsg = {
   email: string;
   name: string;
   agents: { key: string; name: string }[];
+  shut: string[]; // solo-occupancy rooms currently taken
 };
 
 const params = new URLSearchParams(location.search);
@@ -59,6 +60,20 @@ let room: Room;
 let init: InitMsg;
 let scene: WorldScene | null = null;
 let latestWorld: Entity[] = [];
+// Rooms that admit one person at a time and currently have someone inside.
+let shutRooms = new Set<string>();
+
+// The single door tile of a room — the one punched through its top wall.
+function doorOfRoom(r: RoomInfo): { x: number; y: number } | undefined {
+  return init?.doors.find((d) => d.x >= r.x1 && d.x <= r.x2 && Math.abs(d.y - r.y1) === 1);
+}
+
+// Am I (or, for the admin, the TA) inside this room? The occupant must not
+// be told their own door is shut, and must be able to walk back out.
+function insideRoom(r: RoomInfo): boolean {
+  const me = latestWorld.find((e) => e.id === followId());
+  return !!me && me.x >= r.x1 && me.x <= r.x2 && me.y >= r.y1 && me.y <= r.y2;
+}
 
 const TA_ID = "agent-ta";
 const followId = () => (role === "admin" ? TA_ID : init?.you);
@@ -97,6 +112,7 @@ class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
   private roomLabels: Phaser.GameObjects.Text[] = [];
+  private doorMarks = new Map<string, Phaser.GameObjects.Text>();
   private miniCam!: Phaser.Cameras.Scene2D.Camera;
   private miniMarkers!: Phaser.GameObjects.Graphics;
   private miniZoom = 1;
@@ -128,6 +144,21 @@ class WorldScene extends Phaser.Scene {
         .setDepth(5);
       this.roomLabels.push(label);
     }
+
+    // A 🔒 over the door of each solo-occupancy room, shown while taken.
+    // Drawn as its own object rather than baked into the world texture,
+    // which is rendered once and cannot be re-tinted.
+    for (const r of init.rooms.filter((x) => x.soloOccupancy)) {
+      const d = doorOfRoom(r);
+      if (!d) continue;
+      const mark = this.add
+        .text((d.x + 0.5) * T, (d.y + 0.5) * T, "🔒", { fontSize: "16px" })
+        .setOrigin(0.5)
+        .setDepth(6)
+        .setVisible(false);
+      this.doorMarks.set(r.id, mark);
+    }
+    this.refreshDoors();
 
     // Camera roams the whole campus, following the focus avatar, zoomed in
     // to a room-scale view (the campus is much bigger than the viewport).
@@ -178,6 +209,12 @@ class WorldScene extends Phaser.Scene {
         addMsg({ who: "system", text: `${target.label} is under construction — you can't go in yet.`, cls: "sys" });
         return;
       }
+      // The server refuses this too; saying so here saves the round trip
+      // and, more usefully, explains a click that would otherwise do nothing.
+      if (target && shutRooms.has(target.id) && !insideRoom(target)) {
+        addMsg({ who: "system", text: `The ${target.label} is occupied — one student at a time. Try again shortly.`, cls: "sys" });
+        return;
+      }
       if (idleParked) return;
       room.send("goto", { x: tx, y: ty });
     });
@@ -198,6 +235,15 @@ class WorldScene extends Phaser.Scene {
   }
 
   // Draw floors, walls, doors, and furniture ONCE into a baked texture.
+  // Called on every change to the shut set, and once at scene creation.
+  refreshDoors() {
+    for (const [rid, mark] of this.doorMarks) mark.setVisible(shutRooms.has(rid));
+    init.rooms.forEach((r, i) => {
+      if (!r.soloOccupancy) return;
+      this.roomLabels[i]?.setText((shutRooms.has(r.id) ? "🔒 " : "") + r.label.toUpperCase());
+    });
+  }
+
   private drawWorld(T: number, W: number, H: number) {
     const g = this.add.graphics();
     const doorSet = new Set(init.doors.map((d) => `${d.x},${d.y}`));
@@ -794,6 +840,11 @@ function wireRoom(client: Client) {
     addMsg({ who: "system", text: msg.text, cls: "sys" });
   });
 
+  room.onMessage("doors", (msg: { shut: string[] }) => {
+    shutRooms = new Set(msg.shut);
+    scene?.refreshDoors();
+  });
+
   room.onMessage("typing", (msg: { name: string }) => {
     typingFrom.add(msg.name);
     renderTyping();
@@ -809,6 +860,9 @@ function wireRoom(client: Client) {
   room.onMessage("init", (msg: InitMsg) => {
     init = msg;
     role = msg.role;
+    // `doors` only fires on change, so the current state has to arrive here.
+    shutRooms = new Set(msg.shut ?? []);
+    scene?.refreshDoors();
     // A reconnect that had to fall back to a fresh join sends init again;
     // the panel and the game are already up, only `init` needed refreshing.
     if (booted) return;
