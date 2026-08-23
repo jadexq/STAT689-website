@@ -25,11 +25,26 @@ export interface Reading {
   title: string;
   file: string;
   link?: string;
+  // Always in the prompt, never in the chunk index. For the document where
+  // retrieval MISSING it produces a confidently wrong answer rather than a
+  // vague one — a deadline, above all. Without the index half of that rule
+  // the document would be in the prompt twice, once pinned and once as a
+  // retrieved passage; and the agenda in particular is a single markdown
+  // table, which chunking shreds across rows.
+  pinned?: boolean;
   // This reading is the course schedule: read as prose like any other, and
   // additionally parsed as a table by agenda.ts. Marked in the manifest
   // rather than found by filename, so a rename cannot silently turn the
-  // schedule off.
+  // schedule off. Implies pinned.
   agenda?: boolean;
+}
+
+// Pinned documents are handled whole, by whoever always includes them. They
+// are kept out of retrieval entirely — out of the chunk index, and out of
+// matchReading, because naming one would also pin session.readingId to it for
+// the rest of the conversation and starve every later question of search.
+export function isPinned(r: Reading): boolean {
+  return Boolean(r.pinned || r.agenda);
 }
 
 // Where the corpus lives. Defaults to the repo's own materials/ folder;
@@ -102,7 +117,7 @@ export async function readingFile(
 
 // Match a reading the student named in free text, by title words, id, or link.
 export async function matchReading(message: string): Promise<Reading | null> {
-  const readings = await listReadings();
+  const readings = (await listReadings()).filter((r) => !isPinned(r));
   const lower = message.toLowerCase();
   for (const r of readings) {
     if (lower.includes(r.id.toLowerCase()) || lower.includes(r.title.toLowerCase())) return r;
@@ -218,7 +233,7 @@ async function indexKey(readings: Reading[]): Promise<string> {
 }
 
 async function buildIndex(): Promise<NonNullable<typeof index>> {
-  const readings = await listReadings();
+  const readings = (await listReadings()).filter((r) => !isPinned(r));
   const key = await indexKey(readings);
   if (index?.key === key) return index;
 

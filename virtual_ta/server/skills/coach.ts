@@ -11,20 +11,75 @@
 import { chatLLM } from "../llm.ts";
 import { BASE_PERSONA } from "../persona.ts";
 import { listReadings, loadReading, matchReading, passageBlock, searchMaterials } from "../materials.ts";
+import { loadAgenda, type AgendaRow } from "../agenda.ts";
 import { readQuestions, recordQuestion, writeDigest } from "../logger.ts";
 import type { Session } from "../session.ts";
 import type { SkillResult } from "./types.ts";
 
-// Announcements and the agenda, as the space reported them this turn. The
-// ordering rule matters: a reading can say "the homework is due Friday" and be
-// a year out of date, while the board is what the instructor pinned today.
-function bulletinBlock(session: Session): string {
-  if (!session.bulletin) return "";
+// Everything the TA needs to answer a logistics question: the announcements
+// the instructor has pinned, and the schedule.
+//
+// The two arrive by different routes on purpose. Announcements come over the
+// wire in session.bulletin because only the virtual space knows them — they
+// live in its boards.json. The agenda is already in this process's own
+// corpus, so it is read straight from there; sending it out to the space and
+// back would be work in service of symmetry.
+//
+// Always included rather than retrieved. It is the one document where
+// retrieval missing it yields a confidently wrong answer about a deadline
+// instead of a vague one — which is also why it is `pinned` and therefore
+// kept out of the chunk index, so it cannot land in the prompt twice.
+
+const AGENDA_CHARS = 6_000;
+
+function agendaLine(r: AgendaRow): string {
+  const when = new Date(`${r.iso}T00:00:00Z`).toUTCString().slice(0, 3);
+  const where = [r.week && `week ${r.week}`, r.lecture && `lecture ${r.lecture}`]
+    .filter(Boolean)
+    .join(", ");
+  const bits = [r.content, r.homework && `homework: ${r.homework}`, r.topic && `topic: ${r.topic}`]
+    .filter((b) => b && b !== "-")
+    .join(" · ");
+  return `- ${r.iso} (${when}${where ? `, ${where}` : ""}) ${bits}`;
+}
+
+function scheduleBlock(rows: AgendaRow[]): string {
+  // Only rows with something written against them. Forty blank placeholder
+  // rows are not neutral filler — they invite the model to fill them in, and
+  // an invented Week 9 topic stated with the agenda's authority is worse than
+  // "not scheduled yet".
+  const planned = rows.filter((r) => r.planned).map(agendaLine);
+  const unplanned = rows.filter((r) => !r.planned);
+
+  // Trim from the OLDEST end when it does not fit: a past session matters
+  // less than a future one, and truncating the tail would hide deadlines.
+  let used = planned.reduce((n, l) => n + l.length + 1, 0);
+  while (planned.length > 1 && used > AGENDA_CHARS) {
+    used -= planned.shift()!.length + 1;
+  }
+
+  const out = [`COURSE SCHEDULE (today is ${new Date().toISOString().slice(0, 10)}):`, ...planned];
+  if (unplanned.length) {
+    out.push(
+      `(${unplanned.length} later session${unplanned.length === 1 ? " is" : "s are"} on the calendar but not planned yet — ${unplanned[0].iso} onwards. Say they are not scheduled yet rather than guessing what they cover.)`
+    );
+  }
+  return out.join("\n");
+}
+
+async function noticeboard(session: Session): Promise<string> {
+  const parts: string[] = [];
+  if (session.bulletin) parts.push(`ANNOUNCEMENTS the instructor has pinned:\n${session.bulletin}`);
+  // A corpus with no agenda is normal, and a broken one must not take the
+  // answer down with it — the TA can still coach from the readings.
+  const agenda = await loadAgenda().catch(() => null);
+  if (agenda?.rows.length) parts.push(scheduleBlock(agenda.rows));
+  if (!parts.length) return "";
   return `
 
 COURSE NOTICEBOARD — what the instructor has posted, and the agenda:
 ---
-${session.bulletin}
+${parts.join("\n\n")}
 ---
 Rule: for logistics — dates, deadlines, what is assigned, what happens when — the noticeboard above is authoritative and overrides anything a reading says. For everything else, the readings are the source.`;
 }
@@ -33,6 +88,7 @@ const DIGEST_RE = /\b(digest|question summary|summarize .* questions|what .* stu
 
 export async function coach(session: Session, message: string): Promise<SkillResult> {
   const text = message.replace(/^\/coach\s*/i, "").trim() || message.trim();
+  const board = await noticeboard(session);
 
   // Instructor asking for the collected-questions digest
   if (DIGEST_RE.test(text)) return questionDigest(session, text);
@@ -50,7 +106,7 @@ export async function coach(session: Session, message: string): Promise<SkillRes
 
     if (passages.length) {
       const found = [...new Set(passages.map((p) => p.title))];
-      const system = `${BASE_PERSONA}${bulletinBlock(session)}
+      const system = `${BASE_PERSONA}${board}
 
 A student asked a question. The passages below were retrieved from the course materials because they look relevant.
 Rules:
@@ -70,7 +126,7 @@ ${passageBlock(passages)}`;
     // Nothing matched. Say so rather than implying the materials were
     // consulted and agreed — a confident answer with no source is exactly
     // what students should not learn to trust here.
-    const system = `${BASE_PERSONA}${bulletinBlock(session)}
+    const system = `${BASE_PERSONA}${board}
 
 A student has asked you something, and nothing in the course materials matched it.
 Rules:
@@ -92,7 +148,7 @@ ${list}`;
   // Collect the student's question for the instructor digest
   if (text.includes("?")) await recordQuestion(loaded.reading.id, text);
 
-  const system = `${BASE_PERSONA}${bulletinBlock(session)}
+  const system = `${BASE_PERSONA}${board}
 
 You are answering a student's question about the course document "${loaded.reading.title}".
 Rules:
