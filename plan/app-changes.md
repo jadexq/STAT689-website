@@ -1,5 +1,8 @@
 # STAT 689 — application changes
 
+> **New here? Read [`README.md`](./README.md) first** — where the project stands, what the
+> next step is, and which document answers which question.
+
 **What this file is for:** deliberate changes to the *application itself* — what we decided to
 change, why, and what it cost. Written before the change and kept afterwards, because the
 reasoning is the part that gets lost. "Why can't the instructor walk around as a student?" is

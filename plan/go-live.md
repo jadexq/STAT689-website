@@ -1,5 +1,8 @@
 # STAT 689 — go-live checklist
 
+> **New here? Read [`README.md`](./README.md) first** — where the project stands, what the
+> next step is, and which document answers which question.
+
 **Status:** open · **Written:** 2026-08-23 · **Author:** Claude, for Jade Wang
 
 > **No secrets. No real student names or email addresses.** The repo is private today; git
