@@ -12,3 +12,7 @@ user_requirements/
 
 # Test fixtures — large, and not the place the corpus will live (see plan 2e)
 test_material/
+
+# Class rosters exported from Howdy — real student names and addresses, which
+# are not ours to publish. Git history outlives a later deletion.
+students/
