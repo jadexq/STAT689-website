@@ -4,6 +4,11 @@
       "name": "STAT689-project",
       "description": "The class project repository — notebooks, data notes, and the shared write-up. Open an issue or a pull request; that is how work gets submitted.",
       "url": "https://github.com/jadexq/STAT689-project"
+    },
+    {
+      "name": "STAT689-website",
+      "description": "The source of the campus you are standing in: the space itself, the virtual TA, and the deployment that puts them on the web. Read the commit history to see how it was built.",
+      "url": "https://github.com/jadexq/STAT689-website"
     }
   ]
 }

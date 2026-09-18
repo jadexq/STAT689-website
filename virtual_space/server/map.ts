@@ -2,7 +2,7 @@
 // (hand-authoring the walls got error-prone at this size).
 //
 // Layout (43 x 21 tiles):
-//   rows  1-6   six student offices (S1-S6)
+//   rows  1-6   ten student offices (S1-S10)
 //   rows  8-12  commons — the hall
 //   rows 14-19  Classroom | Prep Room | Library | Computer Lab | TA Office
 //
@@ -15,7 +15,7 @@
 export const TILE = 32;
 
 // A board feed is not always a room. The class-wide announcements feed has no
-// room of its own: it is displayed by all six student offices, which is where
+// room of its own: it is displayed by all ten student offices, which is where
 // students spawn, so an announcement is the first thing they see at sign-in.
 export const ANNOUNCEMENTS = "announcements";
 
@@ -32,7 +32,7 @@ export interface RoomDef {
   hasBoard?: boolean; // room has a bulletin board the instructor can pin posts to
   // Which feed this room's board displays. Absent means the room's own feed.
   // Every student office points at ANNOUNCEMENTS, so one pinned item shows up
-  // in six rooms — and unpinning it later stays one action rather than six.
+  // in ten rooms, and unpinning it later stays one action rather than ten.
   boardFeed?: string;
   closed?: boolean; // room is sealed off (under construction); no way in
   // At most one human inside at a time; the door shuts behind them.
@@ -50,28 +50,77 @@ export interface RoomDef {
 export const CLASSROOM_OPEN = false;
 export const PREP_ROOM_OPEN = false;
 
-const OFFICE_TINT_A = "#2e3a54";
-const OFFICE_TINT_B = "#33405c";
+// Light "Gather" palette. Two rules hold the whole thing together:
+//   * every floor sits in a narrow lightness band (~84-90%), so no room reads
+//     as brighter than another, only as a different hue;
+//   * furniture and walls carry a dark warm outline, so the shapes read
+//     against any of them.
+// Offices get ten distinct tints rather than an A/B alternation: a student
+// should recognise their own door from across the hall by colour alone.
+const OFFICE_TINTS = [
+  "#f4dbcf", // s1   clay
+  "#eee5c8", // s2   wheat
+  "#d9e9da", // s3   sage
+  "#d5e4f0", // s4   sky
+  "#e4dbef", // s5   lilac
+  "#f2dee8", // s6   rose
+  "#dfe7d0", // s7   olive
+  "#cfe6e6", // s8   teal
+  "#f3e2cd", // s9   apricot
+  "#dfdcea", // s10  slate violet
+];
+
+// Ten student offices, three tiles wide on a pitch of four. They span x=2..40,
+// which leaves a symmetric two-tile wall at each end of the 43-wide map.
+//
+// They used to be six tiles wide on a pitch of seven, which fitted six. Making
+// them narrower was the cheap way to reach ten: no other room moves, the hall
+// keeps its shape, and every door below y=7 is untouched. The cost is that an
+// office label no longer fits inside the room, so the client draws the
+// occupant's name alone rather than the full "Sam's Office".
+const OFFICE_W = 3;
+const OFFICE_PITCH = 4;
+const OFFICE_X0 = 2;
+const OFFICE_Y1 = 1;
+const OFFICE_Y2 = 6;
+
+// Placeholders only. roster.ts overwrites `label` at boot for every slot a
+// real address holds, so these show only while a slot is vacant.
+const OFFICE_NAMES = [
+  "Sam", "Ben", "Chloe", "Dev", "Grace",
+  "Student 6", "Student 7", "Student 8", "Student 9", "Student 10",
+];
+
+const officeX1 = (i: number) => OFFICE_X0 + i * OFFICE_PITCH;
+// The door of office i, on the wall between the offices and the hall.
+const officeDoorX = (i: number) => officeX1(i) + 1;
+
+const OFFICES: RoomDef[] = OFFICE_NAMES.map((name, i): RoomDef => ({
+  id: `office-s${i + 1}`,
+  label: `${name}'s Office`,
+  x1: officeX1(i),
+  y1: OFFICE_Y1,
+  x2: officeX1(i) + OFFICE_W - 1,
+  y2: OFFICE_Y2,
+  spawn: { x: officeX1(i) + 1, y: 3 },
+  tint: OFFICE_TINTS[i],
+  kind: "office",
+  hasBoard: true,
+  boardFeed: ANNOUNCEMENTS,
+}));
 
 export const ROOMS: RoomDef[] = [
-  // --- band 1: six student offices (rows 1-6) ---
-  { id: "office-s1",  label: "Sam's Office",   x1: 1,  y1: 1, x2: 6,  y2: 6, spawn: { x: 3,  y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  { id: "office-s2",  label: "Ben's Office",   x1: 8,  y1: 1, x2: 13, y2: 6, spawn: { x: 10, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  { id: "office-s3",  label: "Chloe's Office", x1: 15, y1: 1, x2: 20, y2: 6, spawn: { x: 17, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  { id: "office-s4",  label: "Dev's Office",   x1: 22, y1: 1, x2: 27, y2: 6, spawn: { x: 24, y: 3 }, tint: OFFICE_TINT_B, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  { id: "office-s5",  label: "Grace's Office", x1: 29, y1: 1, x2: 34, y2: 6, spawn: { x: 31, y: 3 }, tint: OFFICE_TINT_A, kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
-  // Label patched at boot by roster.ts when a real address holds the slot.
-  { id: "office-s6",  label: "Student 6's Office", x1: 36, y1: 1, x2: 41, y2: 6, spawn: { x: 38, y: 3 }, tint: "#2c4257", kind: "office", hasBoard: true, boardFeed: ANNOUNCEMENTS },
+  ...OFFICES,
   // --- bottom band: special rooms + TA office (rows 14-19) ---
-  { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#27443a", kind: "special",
+  { id: "classroom",    label: CLASSROOM_OPEN ? "Classroom" : "Classroom 🚧", x1: 1,  y1: 14, x2: 8,  y2: 19, spawn: { x: 4,  y: 16 }, tint: "#dbe9de", kind: "special",
     ...(CLASSROOM_OPEN ? {} : { closed: true }) },
-  { id: "prep-room",    label: PREP_ROOM_OPEN ? "Prep Room" : "Prep Room 🚧", x1: 10, y1: 14, x2: 16, y2: 19, spawn: { x: 13, y: 16 }, tint: "#2a4448", kind: "special",
+  { id: "prep-room",    label: PREP_ROOM_OPEN ? "Prep Room" : "Prep Room 🚧", x1: 10, y1: 14, x2: 16, y2: 19, spawn: { x: 13, y: 16 }, tint: "#e9e1d4", kind: "special",
     ...(PREP_ROOM_OPEN ? {} : { closed: true }) },
-  { id: "library",      label: "Library",      x1: 18, y1: 14, x2: 25, y2: 19, spawn: { x: 21, y: 16 }, tint: "#4d3b20", kind: "special", hasBoard: true },
-  { id: "computer-lab", label: "Computer Lab", x1: 27, y1: 14, x2: 33, y2: 19, spawn: { x: 30, y: 16 }, tint: "#233d52", kind: "special", hasBoard: true },
-  { id: "office-ta",    label: "TA Office",    x1: 35, y1: 14, x2: 41, y2: 19, spawn: { x: 38, y: 16 }, tint: "#3a3158", kind: "special", soloOccupancy: true },
+  { id: "library",      label: "Library",      x1: 18, y1: 14, x2: 25, y2: 19, spawn: { x: 21, y: 16 }, tint: "#edd9b4", kind: "special", hasBoard: true },
+  { id: "computer-lab", label: "Computer Lab", x1: 27, y1: 14, x2: 33, y2: 19, spawn: { x: 30, y: 16 }, tint: "#d8e5ed", kind: "special", hasBoard: true },
+  { id: "office-ta",    label: "TA Office",    x1: 35, y1: 14, x2: 41, y2: 19, spawn: { x: 38, y: 16 }, tint: "#e6def2", kind: "special", soloOccupancy: true },
   // --- commons: catch-all for all remaining floor; rect = the hall (label/spawn) ---
-  { id: "commons", label: "Common Area", x1: 1, y1: 8, x2: 41, y2: 12, spawn: { x: 21, y: 10 }, tint: "#2b3247", kind: "commons" },
+  { id: "commons", label: "Common Area", x1: 1, y1: 8, x2: 41, y2: 12, spawn: { x: 21, y: 10 }, tint: "#ece5d7", kind: "commons" },
 ];
 
 // Which feed a room's board shows.
@@ -80,7 +129,7 @@ export function boardFeedOf(room: RoomDef): string {
 }
 
 // Where the instructor can pin. Not the same set as the rooms that *display* a
-// board: the six offices all show the announcements feed, and posting "to an
+// board: the ten offices all show the announcements feed, and posting "to an
 // office" is a thing the class-wide design deliberately does not offer.
 export const POST_TARGETS: { id: string; label: string }[] = [
   { id: ANNOUNCEMENTS, label: "📣 Announcements — all students" },
@@ -95,8 +144,9 @@ const COMMONS_RECTS = [
 // Door tiles punched through walls (also exported so the client can
 // render thresholds).
 export const DOORS: { x: number; y: number }[] = [
-  // offices → the hall
-  { x: 3, y: 7 }, { x: 10, y: 7 }, { x: 17, y: 7 }, { x: 24, y: 7 }, { x: 31, y: 7 }, { x: 38, y: 7 },
+  // offices → the hall, one each, derived from the office geometry above so
+  // a door cannot end up in a wall if the spacing ever changes again
+  ...OFFICES.map((_, i) => ({ x: officeDoorX(i), y: 7 })),
   // the hall → bottom rooms (a sealed room's door does not exist)
   ...(CLASSROOM_OPEN ? [{ x: 4, y: 13 }] : []),
   ...(PREP_ROOM_OPEN ? [{ x: 13, y: 13 }] : []),

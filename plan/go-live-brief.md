@@ -100,18 +100,15 @@ LEFTOVER TO CLEAN UP: the test reading `notation-note` ("TEST — delete before 
 corpus, and Tester's grades are now in the bucket. No delete route (E7). The pre-class bucket
 wipe removes both — do the wipe after this, not before.
 
-## 4. <test-2>'s IAP grant — USER'S DECISION, do not act unasked
-Still granted. Leaving it lets that person sign into a space containing real students; they
-would land in the Common Area (no slot) and be refused handouts, but they can see and chat.
-    gcloud iap web remove-iam-policy-binding \
-      --resource-type=cloud-run --service=stat689 --region=us-central1 --project=stat689 \
-      --member="user:<test-2>" --role="roles/iap.httpsResourceAccessor"
-Reversible either way. Decide before students arrive.
+## 4. <test-2>'s IAP grant — DONE 2026-08-23, revoked
+Accessors are now the instructor's two accounts only. The principal is stored case-sensitively:
+the remove call fails with "binding not found" unless the member matches the policy's casing.
 
-## 5. Merge to main — UNBLOCKED as of 2026-08-23; Stage 7 passed in full
-`main` is 80 behind. Not done yet — worth deciding whether E9 gets fixed on the branch first:
-    git checkout main && git merge --no-ff multi-user-and-deploy-prep && git push origin main
-Then tick D5b/D7/D8/D10/D11/E8 in `plan/open-issues.md`.
+## 5. Merge to main — DONE 2026-08-23 (`ab2e47b`, --no-ff), after Stage 7 passed in full
+D8/D10/D11/E8 ticked in open-issues.md on the way; D5b and D7 deliberately left open.
+
+**NOT DEPLOYED: the E9 fix.** `stat689-00005-5db` predates it, so the TA in production still
+writes `\[ … \]`. The fix is on main and on the branch, and takes effect at the next deploy.
 
 ## 6. When the class list arrives — the mechanical pass
 Runbook lives in [`go-live.md`](./go-live.md) ("Per student — do BOTH"). Not repeated here.

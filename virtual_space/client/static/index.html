@@ -6,18 +6,29 @@
 <title>Virtual Space — Course Campus</title>
 <style>
   :root {
-    --bg: #0f1320;
-    --panel: #171c2c;
-    --panel-2: #1d2335;
-    --line: #2a3145;
-    --ink: #dfe6f5;
-    --muted: #8b96b3;
-    --accent: #8f6fe8;
-    --accent-soft: #2c2547;
-    --human: #4da3ff;
-    --ta: #8f6fe8;
-    --ok: #3ecf8e;
-    --warn: #ffb454;
+    /* Light theme. --bg is the warm ground the whole app sits on; panels are
+       white so the UI lifts off it, which is what separates "the interface"
+       from "the world" — in the dark theme both were the same navy. */
+    --bg: #f0e9dc;
+    --panel: #ffffff;
+    --panel-2: #f8f4ec;
+    --line: #ded2bd;
+    --ink: #2f2a24;
+    --muted: #7c7365;
+    --accent: #6b4fd8;
+    --accent-soft: #ece8fb;
+    --human: #1f6fd0;
+    --ta: #6b4fd8;
+    --ok: #1c7f55;
+    --warn: #a86a12;
+    /* Tinted card surfaces, one per feed, kept pale so the coloured title
+       above them carries the identity rather than the fill. */
+    --tint-ok: #edf7f1;
+    --tint-ok-line: #bcdcc9;
+    --tint-warn: #fdf5e4;
+    --tint-warn-line: #e6d3a6;
+    --tint-accent: #f2effd;
+    --tint-accent-line: #cfc6f0;
   }
   * { box-sizing: border-box; }
   body {
@@ -36,6 +47,7 @@
     width: 100%; height: calc(100vh - 76px); min-height: 460px;
     border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
     background: var(--bg);
+    box-shadow: 0 1px 3px rgba(74, 59, 49, .10);
   }
   #game canvas { display: block; }
   #minimap-frame {
@@ -52,7 +64,7 @@
     display: flex; flex-direction: column; gap: 12px;
     height: calc(100vh - 28px); min-height: 560px;
   }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 3px rgba(74, 59, 49, .07); }
   #side-head { padding: 12px 14px; font-weight: 700; font-size: 15px; }
   #side-head .sub { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
   #side-head .row { display: flex; gap: 8px; align-items: center; font-weight: 400; }
@@ -67,10 +79,10 @@
   #shelf-wrap { display: none; border-bottom: 1px solid var(--line); }
   #shelf-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ok); font-weight: 700; }
   #shelf { padding: 4px 14px 12px; max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-  .shelf-item { background: #16281f; border: 1px solid #2c5443; border-radius: 10px; padding: 8px 11px; font-size: 13px; }
+  .shelf-item { background: var(--tint-ok); border: 1px solid var(--tint-ok-line); border-radius: 10px; padding: 8px 11px; font-size: 13px; }
   .shelf-item a { color: var(--ok); text-decoration: none; font-weight: 600; }
   .shelf-item a:hover { text-decoration: underline; }
-  .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
+  .shelf-item .fmt { font-size: 10.5px; color: var(--muted); background: #ffffff; border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; letter-spacing: .05em; }
   /* Floated right so the title keeps the full row and long titles wrap under
      it rather than pushing the save link off the card. */
   .shelf-item .dl { float: right; color: var(--muted); font-weight: 700; text-decoration: none; padding: 0 2px; margin-left: 6px; }
@@ -83,7 +95,7 @@
   #handouts-wrap { display: none; border-bottom: 1px solid var(--line); }
   #handouts-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 700; }
   #handouts { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
-  .handout-item { background: #1e1a33; border: 1px solid #453a6e; border-radius: 10px; padding: 8px 11px; font-size: 13px; }
+  .handout-item { background: var(--tint-accent); border: 1px solid var(--tint-accent-line); border-radius: 10px; padding: 8px 11px; font-size: 13px; }
   .handout-item a { color: var(--accent); text-decoration: none; font-weight: 600; }
   .handout-item a:hover { text-decoration: underline; }
   .handout-item .prog { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
@@ -95,7 +107,7 @@
   .upnext-row.unplanned b { color: var(--muted); font-style: italic; font-weight: 400; }
   #board-title { padding: 10px 14px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--warn); font-weight: 700; }
   #board-list { padding: 4px 14px 12px; max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-  .board-item { background: #2a2416; border: 1px solid #5a4a22; border-radius: 10px; padding: 8px 11px; font-size: 13px; white-space: pre-wrap; }
+  .board-item { background: var(--tint-warn); border: 1px solid var(--tint-warn-line); border-radius: 10px; padding: 8px 11px; font-size: 13px; white-space: pre-wrap; }
   .board-item .meta { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
   .board-item a { color: var(--warn); }
   .board-empty { color: var(--muted); font-size: 12.5px; font-style: italic; }
@@ -112,7 +124,7 @@
   .msg .body { display: block; margin-top: 2px; color: var(--ink); white-space: pre-wrap; }
   .msg .body code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; font-size: 12.5px; }
   .msg .body a { color: var(--accent); }
-  .msg.private { border-color: #3d4f77; background: #1a2236; }
+  .msg.private { border-color: #bfd0ea; background: #eef4fc; }
   .msg.sys { color: var(--muted); background: transparent; border-style: dashed; font-size: 12.5px; }
   #typing { padding: 0 14px 8px; color: var(--muted); font-size: 12px; font-style: italic; min-height: 20px; }
   #chat-mode { display: none; padding: 0 14px 6px; font-size: 12.5px; color: var(--muted); }
@@ -122,7 +134,7 @@
   button {
     font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
     background: var(--accent-soft); color: var(--ink);
-    border: 1px solid #4a3f77; border-radius: 9px; padding: 8px 13px;
+    border: 1px solid var(--tint-accent-line); border-radius: 9px; padding: 8px 13px;
     transition: background .12s, border-color .12s;
   }
   button:hover { border-color: var(--accent); }
@@ -137,18 +149,18 @@
   #admin .btns { flex-wrap: wrap; }
   #admin-status { min-height: 18px; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
   #admin-status.ok { color: var(--ok); }
-  #admin-status.err { color: #ff7a7a; }
+  #admin-status.err { color: #c02626; }
   hr.sep { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
 
-  #post-box { border: 1px solid #5a4a22; background: #2a2416; border-radius: 10px; padding: 10px 12px; }
+  #post-box { border: 1px solid var(--tint-warn-line); background: var(--tint-warn); border-radius: 10px; padding: 10px 12px; }
   #post-box .admin-title { color: var(--warn); margin-bottom: 6px; }
   #post-feed { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
-  .feed-item { display: flex; gap: 8px; align-items: flex-start; background: #1f1b10; border: 1px solid #5a4a22; border-radius: 8px; padding: 6px 8px; font-size: 12.5px; }
+  .feed-item { display: flex; gap: 8px; align-items: flex-start; background: #fffaf0; border: 1px solid var(--tint-warn-line); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; }
   .feed-item span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
   .feed-item button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
-  .feed-item button:hover { color: #ff8fa3; }
+  .feed-item button:hover { color: #c02626; }
   .feed-empty { color: var(--muted); font-size: 12px; font-style: italic; }
-  #upload-box { border: 1px solid #2c5443; background: #16281f; border-radius: 10px; padding: 10px 12px; }
+  #upload-box { border: 1px solid var(--tint-ok-line); background: var(--tint-ok); border-radius: 10px; padding: 10px 12px; }
   #upload-box .admin-title { color: var(--ok); margin-bottom: 8px; }
   #hadmin-box .admin-title { color: var(--accent); margin-bottom: 8px; }
   #hadmin-list { display: flex; flex-direction: column; gap: 7px; }
@@ -159,11 +171,11 @@
   .hadmin-row a:hover { text-decoration: underline; }
   #upload-box .row { margin-bottom: 8px; }
   #upload-box .row:last-child { margin-bottom: 0; }
-  #upload-box input[type=file] { flex: 1; font-size: 12px; padding: 5px 7px; background: #10201a; border-color: #2c5443; }
-  #upload-box input[type=text], #up-title { background: #10201a; border-color: #2c5443; }
+  #upload-box input[type=file] { flex: 1; font-size: 12px; padding: 5px 7px; background: #ffffff; border-color: var(--tint-ok-line); }
+  #upload-box input[type=text], #up-title { background: #ffffff; border-color: var(--tint-ok-line); }
   #upload-box label { flex: 1; color: var(--muted); font-size: 12px; }
-  #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #1f1b10; border-color: #5a4a22; }
-  #mic-toggle.on { background: #4d2020; border-color: #a04545; }
+  #post-text { width: 100%; min-height: 76px; resize: vertical; margin-bottom: 8px; background: #ffffff; border-color: var(--tint-warn-line); }
+  #mic-toggle.on { background: #fbe4e4; border-color: #c96a6a; color: #8c2020; }
 </style>
 </head>
 <body>

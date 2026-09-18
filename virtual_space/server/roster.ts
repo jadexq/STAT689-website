@@ -1,4 +1,4 @@
-// The class roster: six student characters, one office each.
+// The class roster: ten student characters, one office each.
 //
 // A slot is a CHARACTER, not a person. Until a real student's address is
 // assigned to it the character is played by an AI stand-in; assign the
@@ -13,7 +13,7 @@
 // identity.ts, and why it drives every surface a name appears on rather than
 // only the avatar. See plan/app-changes.md, 2026-08-23.
 //
-// Slot ids are opaque handles (s1..s6). They deliberately do not look like
+// Slot ids are opaque handles (s1..s10). They deliberately do not look like
 // names: STUDENTS="alice@example.com=s6" means "give Alice that office", not
 // "call Alice s6", and an id that reads like a name invites the second
 // reading.
@@ -54,6 +54,13 @@ export const SLOTS: Slot[] = [
   // here would only ever be in the way. The placeholder shows on the office
   // door in the one case where the slot is vacant.
   { id: "s6", office: "office-s6", name: "Student 6", color: "#4da3ff" },
+  // s7..s10 came with the ten-office map. Like s6 they carry no persona:
+  // every slot is expected to be held by a real address, and a stand-in that
+  // can never appear is a character to maintain for nothing.
+  { id: "s7",  office: "office-s7",  name: "Student 7",  color: "#c08cd8" },
+  { id: "s8",  office: "office-s8",  name: "Student 8",  color: "#5bb5a6" },
+  { id: "s9",  office: "office-s9",  name: "Student 9",  color: "#e08a5b" },
+  { id: "s10", office: "office-s10", name: "Student 10", color: "#7f93d4" },
 ];
 
 function csv(raw: string | undefined): string[] {
@@ -124,7 +131,8 @@ function nameFromEmail(email: string): string {
  * the avatar consulted ROSTER and the other three read the character's
  * placeholder, which named nobody once a real person held the slot.
  *
- * Keep names short by convention: an office label is drawn inside a 6x6 room.
+ * Keep names short by convention: an office is 3x6 and the client draws the
+ * occupant's name alone inside it.
  * Nothing enforces it.
  */
 export function displayNameFor(email: string): string {

@@ -1,5 +1,8 @@
 # STAT 689 deployment — open issues
 
+> **New here? Read [`README.md`](./README.md) first** — where the project stands, what the
+> next step is, and which document answers which question.
+
 **Companion to [`gcp-deployment-plan.md`](./gcp-deployment-plan.md).** That file explains *why*
 decisions were made and is written as a narrative. This one tracks *what is still outstanding*
 and is meant to be skimmed and ticked off. Deliberate changes to the app — as opposed to

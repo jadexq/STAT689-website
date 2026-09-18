@@ -1,9 +1,12 @@
 # STAT 689 — Google Cloud deployment plan
 
 **Status:** approved 2026-08-20 · **Phase A built and verified** · **Phase B complete
-2026-08-22** · **Phase C deployed and verified 2026-08-22** · **redeploy drafted 2026-08-23
-(§15), not executed — what is live is 61 commits behind**
+2026-08-22** · **Phase C deployed and verified 2026-08-22** · **§15 redeploy executed
+2026-08-23 — five revisions through `stat689-00005-5db`, Stage 7 passed in full (§15i)**
 
+> **New here? Read [`README.md`](./README.md) first** — it says where the project stands, what
+> the next step is, and which document answers which question.
+>
 > **Status lives in [`open-issues.md`](./open-issues.md), not here.** This line is a coarse
 > marker only. It read "Phase C not started" for several hours *after* Phase C was deployed —
 > the same drift that D3 and D4 record. Do not restate per-item status in this file.

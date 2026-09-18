@@ -102,6 +102,26 @@ function shade(c: number, f: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
+// What a room writes across its floor. An office is three tiles wide, so the
+// full "Sam's Office" does not fit and the 📌 is noise on top of it: the board
+// is drawn in the room, and every office has one. Other rooms are wide enough
+// to keep both.
+function labelTextFor(r: { kind: string; label: string; hasBoard?: boolean }): string {
+  if (r.kind === "office") return r.label.replace(/'s Office$/i, "").toUpperCase();
+  return (r.hasBoard ? "📌 " : "") + r.label.toUpperCase();
+}
+
+// ---------- palette ----------
+// Light theme. The look rests on three rules, applied without exception:
+// flat mid-saturation fills, one dark warm outline on every object, and a
+// soft shadow where an object meets the floor. Drop any of the three and the
+// shapes stop reading.
+const INK = 0x4a3b31; // the single outline colour, warm rather than black
+const WALL_FACE = 0xfbf6ec; // the lit side of a wall, seen from the floor below
+const WALL_BASE = 0xd3c4aa; // the shaded strip where that wall meets the floor
+const WALL_CAP = 0xe5d9c4; // a wall seen from directly above
+const SHADOW = 0x000000;
+
 // ---------- Phaser scene ----------
 
 function roomInfoAt(x: number, y: number): RoomInfo | undefined {
@@ -154,14 +174,18 @@ class WorldScene extends Phaser.Scene {
       const cx = ((r.x1 + r.x2 + 1) / 2) * T;
       const cy = (r.y1 + 0.7) * T;
       const label = this.add
-        .text(cx, cy, (r.hasBoard ? "📌 " : "") + r.label.toUpperCase(), {
+        .text(cx, cy, labelTextFor(r), {
           fontFamily: "sans-serif",
           fontSize: r.kind === "office" ? "10px" : "11px",
-          color: "#9fb0d0",
+          color: "#5c4f42",
           fontStyle: "bold",
+          // A halo, not decoration: one label can sit over two floor tints,
+          // and dark-on-pale alone is not reliable across all of them.
+          stroke: "#fffaf0",
+          strokeThickness: 3,
         })
         .setOrigin(0.5)
-        .setAlpha(0.85)
+        .setAlpha(0.95)
         .setDepth(5);
       this.roomLabels.push(label);
     }
@@ -179,6 +203,7 @@ class WorldScene extends Phaser.Scene {
         .setVisible(false);
       this.doorMarks.set(r.id, mark);
     }
+
     this.refreshDoors();
 
     // Camera roams the whole campus, following the focus avatar, zoomed in
@@ -274,8 +299,10 @@ class WorldScene extends Phaser.Scene {
       for (let x = 0; x < init.map[y].length; x++) {
         if (init.map[y][x] !== ".") continue;
         const base = hex(roomInfoAt(x, y)?.tint || "#2b3247");
-        let col = (x + y) % 2 === 0 ? base : shade(base, 0.93);
-        if (doorSet.has(`${x},${y}`)) col = shade(base, 1.35);
+        let col = (x + y) % 2 === 0 ? base : shade(base, 0.965);
+        // Doors darken. Lightening a pale floor clamps it to white, so the
+        // threshold would disappear exactly where it needs to be obvious.
+        if (doorSet.has(`${x},${y}`)) col = shade(base, 0.82);
         g.fillStyle(col, 1);
         g.fillRect(x * T, y * T, T, T);
       }
@@ -286,12 +313,12 @@ class WorldScene extends Phaser.Scene {
         if (init.map[y][x] === ".") continue;
         const floorBelow = init.map[y + 1]?.[x] === ".";
         if (floorBelow) {
-          g.fillStyle(0x353e6b, 1);
+          g.fillStyle(WALL_FACE, 1);
           g.fillRect(x * T, y * T, T, T * 0.55);
-          g.fillStyle(0x232946, 1);
+          g.fillStyle(WALL_BASE, 1);
           g.fillRect(x * T, y * T + T * 0.55, T, T * 0.45);
         } else {
-          g.fillStyle(0x262c4a, 1);
+          g.fillStyle(WALL_CAP, 1);
           g.fillRect(x * T, y * T, T, T);
         }
       }
@@ -304,69 +331,112 @@ class WorldScene extends Phaser.Scene {
   }
 
   private drawFurniture(g: Phaser.GameObjects.Graphics, T: number) {
+    // Every primitive below draws in the same order: contact shadow, fill,
+    // outline. The outline is what makes a flat shape read as an object, and
+    // it is the reason these are helpers rather than inline fillRect calls.
+    const pen = (w = 2) => g.lineStyle(w, INK, 1);
+    const drop = (x: number, y: number, w: number, h: number) => {
+      g.fillStyle(SHADOW, 0.13);
+      g.fillRoundedRect(x + 2, y + 3, w, h, 4);
+    };
+
     const desk = (tx: number, ty: number, w = 1.6, h = 0.9) => {
-      g.fillStyle(0x2a2119, 1);
-      g.fillRoundedRect(tx * T, ty * T + 3, w * T, h * T, 4);
-      g.fillStyle(0x4a3c2e, 1);
-      g.fillRoundedRect(tx * T, ty * T, w * T, h * T - 3, 4);
+      const x = tx * T, y = ty * T;
+      drop(x, y, w * T, h * T);
+      g.fillStyle(0xa8743f, 1); // the front edge, in shadow
+      g.fillRoundedRect(x, y + 3, w * T, h * T, 4);
+      pen();
+      g.strokeRoundedRect(x, y + 3, w * T, h * T, 4);
+      g.fillStyle(0xcf9459, 1); // the lit top surface
+      g.fillRoundedRect(x, y, w * T, h * T - 3, 4);
+      pen();
+      g.strokeRoundedRect(x, y, w * T, h * T - 3, 4);
     };
     const chair = (tx: number, ty: number) => {
-      g.fillStyle(0x1b2136, 1);
-      g.fillCircle(tx * T, ty * T, T * 0.28);
+      const x = tx * T, y = ty * T, r = T * 0.28;
+      g.fillStyle(SHADOW, 0.13);
+      g.fillCircle(x + 1, y + 3, r);
+      g.fillStyle(0x6b7ea3, 1);
+      g.fillCircle(x, y, r);
+      pen(1.8);
+      g.strokeCircle(x, y, r);
     };
     const plant = (tx: number, ty: number) => {
-      g.fillStyle(0x3a2f26, 1);
-      g.fillCircle(tx * T, ty * T + 4, T * 0.22);
-      g.fillStyle(0x3f7d4e, 1);
-      g.fillCircle(tx * T, ty * T - 3, T * 0.3);
-      g.fillStyle(0x55a468, 1);
-      g.fillCircle(tx * T - 4, ty * T - 6, T * 0.16);
+      const x = tx * T, y = ty * T;
+      g.fillStyle(SHADOW, 0.13);
+      g.fillCircle(x + 1, y + 7, T * 0.22);
+      g.fillStyle(0xc87a45, 1); // terracotta pot
+      g.fillCircle(x, y + 4, T * 0.22);
+      pen(1.8);
+      g.strokeCircle(x, y + 4, T * 0.22);
+      g.fillStyle(0x4f9b60, 1);
+      g.fillCircle(x, y - 3, T * 0.3);
+      pen(1.8);
+      g.strokeCircle(x, y - 3, T * 0.3);
+      g.fillStyle(0x78c483, 1); // a lighter leaf, so the foliage has a top
+      g.fillCircle(x - 4, y - 6, T * 0.15);
     };
     const table = (tx: number, ty: number, r = 0.7) => {
-      g.fillStyle(0x33291f, 1);
-      g.fillCircle(tx * T, ty * T + 3, r * T);
-      g.fillStyle(0x51422f, 1);
-      g.fillCircle(tx * T, ty * T, r * T);
+      const x = tx * T, y = ty * T;
+      g.fillStyle(SHADOW, 0.13);
+      g.fillCircle(x + 1, y + 5, r * T);
+      g.fillStyle(0xb07c46, 1);
+      g.fillCircle(x, y + 3, r * T);
+      g.fillStyle(0xd7a76f, 1);
+      g.fillCircle(x, y, r * T);
+      pen();
+      g.strokeCircle(x, y, r * T);
     };
     const monitor = (tx: number, ty: number) => {
-      g.fillStyle(0x11141f, 1);
-      g.fillRect(tx * T, ty * T, T * 0.7, T * 0.5);
-      g.fillStyle(0x39c2d7, 0.9);
-      g.fillRect(tx * T + 2, ty * T + 2, T * 0.7 - 4, T * 0.5 - 4);
+      const x = tx * T, y = ty * T, w = T * 0.7, h = T * 0.5;
+      g.fillStyle(0x3f4856, 1);
+      g.fillRoundedRect(x, y, w, h, 3);
+      g.fillStyle(0x86d6ea, 1);
+      g.fillRect(x + 3, y + 3, w - 6, h - 6);
+      pen(1.8);
+      g.strokeRoundedRect(x, y, w, h, 3);
     };
     const bookshelf = (tx: number, ty: number) => {
-      g.fillStyle(0x2a2119, 1);
-      g.fillRect(tx * T, ty * T, T * 1.8, T * 0.55);
-      const cols = [0xc94f4f, 0x4f7dc9, 0xc9a24f, 0x5aa46a, 0x9a6ac9];
+      const x = tx * T, y = ty * T, w = T * 1.8, h = T * 0.55;
+      drop(x, y, w, h);
+      g.fillStyle(0x8a5a36, 1);
+      g.fillRoundedRect(x, y, w, h, 3);
+      const cols = [0xd45f5f, 0x5d87d4, 0xd9ad4a, 0x63ab74, 0xa273cf];
       for (let i = 0; i < 5; i++) {
         g.fillStyle(cols[i], 1);
-        g.fillRect(tx * T + 3 + i * (T * 0.33), ty * T + 3, T * 0.24, T * 0.42);
+        g.fillRect(x + 3 + i * (T * 0.33), y + 3, T * 0.24, T * 0.42);
       }
+      pen();
+      g.strokeRoundedRect(x, y, w, h, 3);
     };
     const pinboard = (tx: number, ty: number) => {
-      g.fillStyle(0x5a4a22, 1);
-      g.fillRect(tx * T, ty * T, T * 1.4, T * 0.5);
-      g.fillStyle(0xf3e9c9, 1);
-      g.fillRect(tx * T + 4, ty * T + 4, T * 0.4, T * 0.34);
-      g.fillRect(tx * T + T * 0.6, ty * T + 5, T * 0.4, T * 0.3);
+      const x = tx * T, y = ty * T, w = T * 1.4, h = T * 0.5;
+      g.fillStyle(0xd2a86a, 1); // cork
+      g.fillRoundedRect(x, y, w, h, 3);
+      g.fillStyle(0xfffdf5, 1); // two pinned notes
+      g.fillRect(x + 4, y + 4, T * 0.4, T * 0.34);
+      g.fillRect(x + T * 0.6, y + 5, T * 0.4, T * 0.3);
+      pen(1.8);
+      g.strokeRoundedRect(x, y, w, h, 3);
     };
 
     for (const r of init.rooms) {
       if (r.kind === "office") {
         desk(r.x1 + 0.6, r.y1 + 0.6);
         chair(r.x1 + 1.4, r.y1 + 2.1);
-        plant(r.x2 + 0.5, r.y1 + 0.6);
-        pinboard(r.x1 + 3.4, r.y1 + 3.6); // the announcements board
+        pinboard(r.x1 + 0.8, r.y1 + 3.6); // the announcements board
+        plant(r.x2 + 0.5, r.y2 + 0.4);
       } else if (r.id === "classroom") {
-        g.fillStyle(0xdfe6f5, 0.85); // whiteboard along the top wall
-        g.fillRect((r.x1 + 0.7) * T, r.y1 * T + 4, (r.x2 - r.x1 - 1.4) * T, T * 0.35);
         for (let row = 0; row < 2; row++)
           for (let col = 0; col < 3; col++) desk(r.x1 + 0.8 + col * 2.3, r.y1 + 2 + row * 1.8, 1.4, 0.7);
       } else if (r.id === "prep-room") {
         desk(r.x1 + 1.5, r.y1 + 2, 3.2, 1.3);
-        g.fillStyle(0xf3f3f3, 0.9);
+        g.fillStyle(0xfffdf5, 1);
         g.fillRect((r.x1 + 2) * T, (r.y1 + 2.2) * T, T * 0.5, T * 0.35);
         g.fillRect((r.x1 + 3) * T, (r.y1 + 2.4) * T, T * 0.5, T * 0.35);
+        g.lineStyle(1.5, INK, 1);
+        g.strokeRect((r.x1 + 2) * T, (r.y1 + 2.2) * T, T * 0.5, T * 0.35);
+        g.strokeRect((r.x1 + 3) * T, (r.y1 + 2.4) * T, T * 0.5, T * 0.35);
         plant(r.x2 + 0.5, r.y2 + 0.5);
       } else if (r.id === "library") {
         bookshelf(r.x1 + 0.6, r.y1 + 0.8);
@@ -387,11 +457,6 @@ class WorldScene extends Phaser.Scene {
         plant(r.x1 + 0.7, r.y2 + 0.4);
         plant(r.x2 + 0.4, r.y1 + 0.7);
       } else if (r.kind === "commons") {
-        table(6, 10.5);
-        table(21, 10.5);
-        table(36, 10.5);
-        table(11, 23.5);
-        table(31, 23.5);
         plant(1.7, 8.7);
         plant(41.3, 8.7);
         plant(1.7, 25.3);
@@ -454,11 +519,12 @@ class WorldScene extends Phaser.Scene {
       const px = (e.x + 0.5) * T;
       const py = (e.y + 0.5) * T;
       const isFocus = e.id === followId();
+      const size = isFocus ? 60 : 44;
       g.fillStyle(hex(e.color), 1);
-      g.fillCircle(px, py, isFocus ? 30 : 22);
+      g.fillRect(px - size / 2, py - size / 2, size, size);
       if (isFocus) {
-        g.lineStyle(10, 0xffffff, 1);
-        g.strokeCircle(px, py, 30);
+        g.lineStyle(10, INK, 1);
+        g.strokeRect(px - size / 2, py - size / 2, size, size);
       }
     }
     const view = this.cameras.main.worldView;
@@ -476,9 +542,9 @@ class WorldScene extends Phaser.Scene {
       let a = this.avatars.get(e.id);
       if (!a) {
         const isFocus = e.id === followId();
-        const shadow = this.add.ellipse(0, 10, 22, 9, 0x000000, 0.28);
-        const circle = this.add.circle(0, 0, 12, hex(e.color));
-        circle.setStrokeStyle(2.5, isFocus ? 0xffffff : 0x11141f, 1);
+        const shadow = this.add.ellipse(0, 12, 22, 8, SHADOW, 0.18);
+        const body = this.add.rectangle(0, 0, 22, 22, hex(e.color));
+        body.setStrokeStyle(2.2, INK, 1);
         const label = this.add
           .text(0, -22, labelFor(e), {
             fontFamily: "sans-serif",
@@ -489,7 +555,7 @@ class WorldScene extends Phaser.Scene {
             padding: { x: 5, y: 2 } as any,
           })
           .setOrigin(0.5);
-        const c = this.add.container(px, py, [shadow, circle, label]);
+        const c = this.add.container(px, py, [shadow, body, label]);
         c.setDepth(10);
         this.miniCam?.ignore(c); // minimap shows dots, not full avatars
         a = { c, label };
@@ -1253,7 +1319,7 @@ function wireRoom(client: Client) {
     new Phaser.Game({
       type: Phaser.AUTO,
       parent: "game",
-      backgroundColor: "#0f1320",
+      backgroundColor: "#e4dccb",
       // Fill the container and follow window resizes — no fixed viewport.
       scale: { mode: Phaser.Scale.RESIZE, width: "100%", height: "100%" },
       scene: WorldScene,
