@@ -3,7 +3,6 @@
 
 import "./env"; // MUST be first — see env.ts
 import path from "path";
-import fs from "fs/promises";
 import { createServer } from "http";
 import express from "express";
 import compression from "compression";
@@ -13,6 +12,7 @@ import { MainRoom } from "./rooms/MainRoom";
 import { logEvent, logFilePath } from "./logger";
 import { identify, identityMode, warmIapKeys } from "./identity";
 import { rosterSummary } from "./roster";
+import { ensureReposSeeded, loadRepos, saveRepos } from "./repos";
 import { taAgenda, taMaterialFile, taMaterials, taUpload } from "./ta";
 import { renderMarkdownPage } from "./render";
 import {
@@ -81,28 +81,38 @@ app.get("/api/materials", async (_req, res) => {
 // ---------- the project repositories ----------
 // Config, not a board post: a pinned link would die with the next
 // boards.json wipe (open-issues D7 wipes state before the first class),
-// and a repo list is the sort of thing that should survive that. Read from
-// disk per request rather than at boot, so editing repos.json is an edit,
-// not a restart — the same reasoning as the readings manifest.
-
-interface RepoCard {
-  name: string;
-  description: string;
-  url: string;
-}
+// and a repo list is the sort of thing that should survive that.
+//
+// The list now lives in DATA_DIR rather than in the image, so adding a
+// codebase mid-semester costs an edit in the admin panel instead of a
+// --source=. redeploy. server/repos.json is the seed, copied in at boot the
+// first time a deployment has no list of its own. See repos.ts.
 
 app.get("/api/repos", async (_req, res) => {
+  // loadRepos() does not throw: an unreadable list is an empty Computer Lab,
+  // not a 500. The room still works, it just has nothing to show.
+  res.json({ repos: await loadRepos() });
+});
+
+// Editing the list. Whole-list replace, guarded exactly like the reading
+// upload above and for the same reason: a repo card is a link students are
+// told to trust, so who may write one is not a detail.
+app.post("/api/repos", async (req, res) => {
+  let who;
   try {
-    const raw = await fs.readFile(path.join(__dirname, "repos.json"), "utf8");
-    const parsed = JSON.parse(raw) as { repos?: RepoCard[] };
-    const repos = (parsed.repos ?? []).filter((r) => r?.name && r?.url);
-    res.json({ repos });
-  } catch (err) {
-    // A missing or malformed repos.json is an empty Computer Lab card, not a
-    // 500: the room still works, it just has nothing to show.
-    console.error(`[space] repos: ${(err as Error).message}`);
-    res.json({ repos: [] });
+    who = await identify(req, req.query.as);
+  } catch {
+    res.status(401).json({ ok: false, note: "Could not verify who you are." });
+    return;
   }
+  if (!who.isAdmin) {
+    logEvent("repos_denied", { email: who.email });
+    res.status(403).json({ ok: false, note: "Only the instructor can change the repositories." });
+    return;
+  }
+  const result = await saveRepos(req.body);
+  logEvent("repos_save", { by: who.email, count: result.repos.length, ok: result.ok });
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 app.get("/api/agenda", async (_req, res) => {
@@ -510,5 +520,8 @@ httpServer.listen(PORT, () => {
   console.log(`Roster: ${rosterSummary()}`);
   void saltGuard().then((g) => console.log(`Handouts: ${g.note}`));
   warmIapKeys(); // fetch IAP's signing keys now, not on the first student
+  // After sync.mjs has restored DATA_DIR, so "no list yet" means a fresh
+  // deployment or a wiped bucket rather than a race with the restore.
+  void ensureReposSeeded();
   console.log(`LLM provider: ${process.env.LLM_PROVIDER || "ollama"} (${process.env.OLLAMA_MODEL || "gpt-oss:120b"})`);
 });
