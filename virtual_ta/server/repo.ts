@@ -35,11 +35,12 @@ interface RepoSource {
   repo: string;
 }
 
-// The same repository the Computer Lab cards point at
-// (virtual_space/server/repos.json). Two processes, two lists: the space's is
-// what a student clicks, this one is what the TA can quote. They are one line
-// each and they name the same repo; if that stops being true, add a repo here
-// and a card there.
+// The same repository the Computer Lab cards point at. Two processes, two
+// lists: the space's is what a student clicks, this one is what the TA can
+// quote. The space's list now lives in DATA_DIR and is edited from the admin
+// panel (virtual_space/server/repos.ts); this one is still code, so adding a
+// card no longer keeps the two in step by itself. If the Lab gains a
+// repository the TA should be able to quote, add it here too and redeploy.
 const SOURCES: RepoSource[] = [
   { id: "project-readme", title: "Class project — README", owner: "jadexq", repo: "STAT689-project" },
 ];

@@ -1021,6 +1021,83 @@ function wirePanel() {
     }
   };
 
+  // The Computer Lab's cards. Edited here rather than in the image, so adding
+  // a codebase mid-semester costs a save instead of a redeploy. The whole list
+  // goes up on every change: there is one writer, so there is nothing to
+  // merge, and the request is simply the state the panel is showing.
+  let repoDraft: RepoCard[] = [];
+
+  async function putRepos(next: RepoCard[]) {
+    try {
+      const res = await fetch(`/api/repos${AS_Q}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repos: next }),
+      });
+      const body = (await res.json()) as { ok: boolean; note: string; repos?: RepoCard[] };
+      setAdminStatus(body.note, body.ok);
+      // The server's list, not the draft: it trims and normalises, and on a
+      // rejection it hands back what is actually stored, so the panel cannot
+      // sit there showing an edit that did not land.
+      repoDraft = body.repos ?? repoDraft;
+      drawRepoAdmin();
+      return body.ok;
+    } catch {
+      setAdminStatus("The repository list did not save.", false);
+      return false;
+    }
+  }
+
+  function drawRepoAdmin() {
+    const box = $<HTMLDivElement>("radmin-list");
+    box.innerHTML = "";
+    if (!repoDraft.length) {
+      const d = document.createElement("div");
+      d.className = "radmin-row";
+      d.textContent = "No repositories yet.";
+      box.appendChild(d);
+      return;
+    }
+    repoDraft.forEach((r, i) => {
+      const d = document.createElement("div");
+      d.className = "radmin-row";
+      const b = document.createElement("b");
+      b.textContent = r.name;
+      const sp = document.createElement("span");
+      sp.textContent = r.url;
+      const x = document.createElement("button");
+      x.textContent = "Remove";
+      x.onclick = () => {
+        void putRepos(repoDraft.filter((_, j) => j !== i));
+      };
+      d.append(b, sp, x);
+      box.appendChild(d);
+    });
+  }
+
+  $<HTMLButtonElement>("repo-add").onclick = async () => {
+    const nameBox = $<HTMLInputElement>("repo-name");
+    const urlBox = $<HTMLInputElement>("repo-url");
+    const descBox = $<HTMLInputElement>("repo-desc");
+    const name = nameBox.value.trim();
+    const url = urlBox.value.trim();
+    if (!name || !url) return setAdminStatus("A repository needs a name and an address.", false);
+    if (await putRepos([...repoDraft, { name, url, description: descBox.value.trim() }])) {
+      nameBox.value = "";
+      urlBox.value = "";
+      descBox.value = "";
+    }
+  };
+
+  void (async () => {
+    try {
+      repoDraft = ((await (await fetch("/api/repos")).json()) as { repos?: RepoCard[] }).repos ?? [];
+    } catch {
+      /* leave the editor empty rather than blocking the panel on one fetch */
+    }
+    drawRepoAdmin();
+  })();
+
   // Handouts. Uploaded as one bundle rather than file by file: at six versions
   // a handout is two dozen markdown files, and `npm run bundle:handout` has
   // already validated them into a single JSON. The server validates again.

@@ -932,7 +932,9 @@ and same FERPA footing as the conversation logs.
    client also avoids a markdown dependency it cannot afford — the bundle is already ~1.2 MB
    against a 1 GiB/month egress allowance.
 4. **`repos.json` is config, not a board post** — so a state wipe does not silently empty the
-   Computer Lab.
+   Computer Lab. *(Superseded 2026-09-17: the list moved to `DATA_DIR` and is edited from the
+   admin panel. `server/repos.json` is now only a seed, copied in the first time a deployment
+   finds no list of its own, which is what still keeps a wipe from emptying the room.)*
 5. **The `announce` skill stays dormant rather than being deleted.** Same pattern as `classroom`.
 
 ---
@@ -1461,3 +1463,43 @@ Library, then a student walks in and sees the post — **passes**. So the board 
 admin mode. That is strong support, but it is not yet proof for E1: smoke runs locally against
 the dev identity, and the instructor's report was against the deployed service. Settle it by
 posting from admin mode in the cloud.
+
+---
+
+## 2026-09-17 · The Computer Lab fills like the Library
+
+**Why.** Adding a codebase mid-semester was a code change and a `--source=.` redeploy, because
+the cards were read from `server/repos.json` inside the image. The readings had already stopped
+working that way. The asymmetry was not a design decision, only the order the two rooms were
+built in.
+
+**What changed.**
+
+| Piece | Before | After |
+| --- | --- | --- |
+| The list | `server/repos.json`, in the image | `DATA_DIR/repos.json`, snapshotted to the bucket |
+| Adding a card | edit, commit, redeploy | type it in the admin panel |
+| Removing one | the same | a Remove button |
+| `server/repos.json` | the live list | the seed, copied in once when a deployment has none |
+
+New `virtual_space/server/repos.ts` owns loading, seeding, validation and an atomic write.
+`POST /api/repos` replaces the whole list behind the same admin guard as the reading upload.
+
+**Three decisions worth keeping.**
+
+1. **Whole-list replace, not add and remove routes.** There is exactly one writer, so there is
+   nothing to merge, and the request is simply the state the panel is showing.
+2. **Seed once, then get out of the way.** Falling back to the seed on every read would mean an
+   instructor who deletes every card watches them reappear. After seeding, the file exists, and
+   an empty file is an answer.
+3. **The URL scheme is validated server-side.** The client assigns `r.url` straight to an
+   anchor's `href`, where a `javascript:` URL runs on click. Only the instructor can reach the
+   route, but a pasted link is exactly the kind of thing nobody reads twice.
+
+**Still a redeploy:** what the *TA* can quote. `virtual_ta/server/repo.ts` keeps its own
+one-line list, because that one is fetched and indexed rather than linked. Adding a card no
+longer keeps the two lists in step by itself.
+
+**This is the first delete in the app.** Everything else, readings and handouts alike, is
+replace-only. A repo card is config rather than a record, so removing one destroys nothing a
+student wrote.
