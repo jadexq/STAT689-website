@@ -38,6 +38,11 @@ test_material/
 # redistributed; user_requirements/ and plan/ are working documents.
 ref/
 user_requirements/
+# Class rosters and the deploy commands generated from them: real student names
+# and addresses. gcloud does NOT read .gitignore unless told to, so being
+# gitignored is not enough. Without this line --source=. uploads the roster to
+# the Cloud Build staging bucket, where it stays after the deploy is done.
+students/
 improvements/
 **/docs/improvements/
 plan/
